@@ -1,8 +1,10 @@
+mod server;
+mod resp;
+
 use anyhow::Result;
 
 use crate::server::Server;
 
-mod server;
 
 #[tokio::main]
 async fn main() -> Result<()> {
