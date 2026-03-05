@@ -1,9 +1,15 @@
 use anyhow::{Error, Result};
+use bytes::BytesMut;
 use log::{error, info};
 use tokio::{
     // AsyncWriteExt trait provides asynchronous write methods like write_all
-    io::AsyncWriteExt,
+    io::{AsyncWriteExt, AsyncReadExt},
     net::{TcpListener, TcpStream},
+};
+
+use crate::resp::{
+    parser::Parser,
+    types::RespType
 };
 
 #[derive(Debug)]
@@ -12,7 +18,7 @@ pub struct Server {
 }
 
 impl Server {
-    // Create a new server instance with the given TcpListener
+    // Create a new server instance on the given port
     pub async fn new(port: u16) -> Self {
         let addr = format!("127.0.0.1:{}", port);
         let listener = match TcpListener::bind(addr).await {
@@ -50,9 +56,21 @@ impl Server {
             // Spawns a new async task to handle the connection
             // This allows the server to handle multiple connections concurrently
             tokio::spawn(async move {
-                if let Err(e) = socket.write_all("Hello".as_bytes()).await {
+                // read the TCP message and store the raw bytes in the buffer
+                let mut buf = BytesMut::with_capacity(512);
+                if let Err(e) = socket.read_buf(&mut buf).await {
+                    panic!("Error reading request: {}", e);
+                }
+
+                // parse the RESP data from the the buffer
+                let resp_data = match Parser::parse(buf) {
+                    Ok((data, _)) => data,
+                    Err(e) => RespType::SimpleError(format!("{}", e)),
+                };
+
+                if let Err(e) = socket.write_all(&resp_data.to_bytes()).await {
                     error!("{}", e);
-                    panic!("Error writing response.");
+                    panic!("Error writing response to the client.");
                 }
             });
         }
