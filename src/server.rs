@@ -8,6 +8,7 @@ use tokio::{
 };
 
 use crate::command::command::extract_command;
+use crate::command::dispatcher::dispatch;
 use crate::resp::{
     parser::Parser,
     types::RespType
@@ -69,15 +70,24 @@ impl Server {
                     Err(e) => RespType::SimpleError(format!("{}", e)),
                 };
 
-                let (_cmd, _args) = match extract_command(&resp_data) {
+                
+                let (cmd, args) = match extract_command(&resp_data) {
                     Ok((cmd, args)) => (cmd, args),
                     Err(e) => {
                         error!("Failed to extract command: {}", e);
                         return;
                     }
                 };
+                
+                let res = match dispatch(cmd) {
+                    Ok(res_str) => res_str,
+                    Err(e) => {
+                        error!("{}", e);
+                        panic!("Error: {}", e);
+                    }
+                };
 
-                if let Err(e) = socket.write_all(&resp_data.to_bytes()).await {
+                if let Err(e) = socket.write_all(res.as_bytes()).await {
                     error!("{}", e);
                     panic!("Error writing response to the client.");
                 }
