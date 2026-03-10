@@ -22,7 +22,7 @@ use crate::resp::types::RespType;
 pub struct Parser;
 
 impl Parser {
-    pub fn parse(buf: BytesMut) -> Result<(RespType, usize)> {
+    pub fn parse(buf: &BytesMut) -> Result<(RespType, usize)> {
         if buf.is_empty() {
             return Err(anyhow::anyhow!("Empty buffer."));
         }
@@ -44,7 +44,7 @@ impl Parser {
     // Parses both simple string and simple error
     // "+<value>\r\n" OR "-<error>\r\n"
     // e.g. "+OK\r\n" -> "OK"
-    fn parse_simple(buf: BytesMut) -> Result<(RespType, usize)> {
+    fn parse_simple(buf: &BytesMut) -> Result<(RespType, usize)> {
         if let Some((data, len)) = Self::read_until_crlf(&buf[1..]) {
             let utf8_str = String::from_utf8(data.to_vec());
 
@@ -60,7 +60,7 @@ impl Parser {
     // here sign is optional
     // ":[<+|->]<value>\r\n"
     // e.g. ":123\r\n" -> 123
-    fn parse_integer(buf: BytesMut) -> Result<(RespType, usize)> {
+    fn parse_integer(buf: &BytesMut) -> Result<(RespType, usize)> {
         if let Some((data, len)) = Self::read_until_crlf(&buf[1..]) {
             let utf8_str = String::from_utf8(data.to_vec());
 
@@ -78,7 +78,7 @@ impl Parser {
 
     // "$<length>\r\n<data>\r\n"
     // e.g. "$5\r\nhello\r\n" -> "hello"
-    fn parse_bulk_string(buf: BytesMut) -> Result<(RespType, usize)> {
+    fn parse_bulk_string(buf: &BytesMut) -> Result<(RespType, usize)> {
         let (bulk_str_len, bytes_consumed) =
             if let Some((data, len)) = Self::read_until_crlf(&buf[1..]) {
                 let bulk_str_len = Self::parse_usize_from_buf(data)?;
@@ -105,7 +105,7 @@ impl Parser {
 
     // "*<number-of-elements>\r\n<element-1>...<element-n>""
     // e.g. "*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n" -> ["hello", "world"]
-    fn parse_array(buf: BytesMut) -> Result<(RespType, usize)> {
+    fn parse_array(buf: &BytesMut) -> Result<(RespType, usize)> {
         let (arr_len, mut bytes_consumed) =
             if let Some((data, len)) = Self::read_until_crlf(&buf[1..]) {
                 let arr_len = Self::parse_usize_from_buf(data)?;
@@ -120,7 +120,7 @@ impl Parser {
         let mut arr = Vec::new();
 
         for _ in 0..arr_len {
-            let (resptype_el, len) = match Self::parse(BytesMut::from(&buf[bytes_consumed..])) {
+            let (resptype_el, len) = match Self::parse(&BytesMut::from(&buf[bytes_consumed..])) {
                 Ok(resptype) => resptype,
                 Err(e) => return Err(anyhow::anyhow!("Invalid value for array element.\n-{}", e)),
             };
@@ -132,7 +132,7 @@ impl Parser {
         Ok((RespType::Array(arr), bytes_consumed + 2))
     }
 
-    fn parse_null(buf: BytesMut) -> Result<(RespType, usize)> {
+    fn parse_null(buf: &BytesMut) -> Result<(RespType, usize)> {
         if let Some((_, len)) = Self::read_until_crlf(&buf[1..]) {
             return Ok((RespType::Null, len + 1));
         }
@@ -140,7 +140,7 @@ impl Parser {
         Err(anyhow::anyhow!("Invalid value for simple string."))
     }
 
-    fn parse_bool(buf: BytesMut) -> Result<(RespType, usize)> {
+    fn parse_bool(buf: &BytesMut) -> Result<(RespType, usize)> {
         if let Some((data, len)) = Self::read_until_crlf(&buf[1..]) {
             let utf8_str = String::from_utf8(data.to_vec());
 

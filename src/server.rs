@@ -7,6 +7,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+use crate::command::command::extract_command;
 use crate::resp::{
     parser::Parser,
     types::RespType
@@ -63,9 +64,17 @@ impl Server {
                 }
 
                 // parse the RESP data from the the buffer
-                let resp_data = match Parser::parse(buf) {
+                let resp_data = match Parser::parse(&buf) {
                     Ok((data, _)) => data,
                     Err(e) => RespType::SimpleError(format!("{}", e)),
+                };
+
+                let (_cmd, _args) = match extract_command(&resp_data) {
+                    Ok((cmd, args)) => (cmd, args),
+                    Err(e) => {
+                        error!("Failed to extract command: {}", e);
+                        return;
+                    }
                 };
 
                 if let Err(e) = socket.write_all(&resp_data.to_bytes()).await {

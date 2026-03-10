@@ -1,5 +1,6 @@
 mod server;
 mod resp;
+mod command;
 
 use anyhow::Result;
 
