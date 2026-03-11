@@ -6,7 +6,7 @@
 
 use bytes::Bytes;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RespType {
     SimpleString(String),
     SimpleError(String),

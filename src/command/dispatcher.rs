@@ -2,19 +2,20 @@ use anyhow::Error;
 
 use crate::command::command::Command;
 
+// Dispatch the commands (execute the command)
 pub fn dispatch(cmd: Command) -> Result<String, Error> {
     match cmd {
         Command::Ping => {
-            Ok("Pong\r\n".to_string())
+            Ok("Pong".to_string())
         }
         Command::Echo(message) => {
-            Ok(message + "\r\n")
+            Ok(message)
         }
         Command::Set(_key, _value) => {
-            Ok("Ok\r\n".to_string())
+            Ok("Ok".to_string())
         }
         Command::Get(_key) => {
-            Ok("Got the key\r\n".to_string())
+            Ok("Got the key".to_string())
         }
     }
 }

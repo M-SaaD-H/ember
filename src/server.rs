@@ -71,10 +71,13 @@ impl Server {
                 };
 
                 
-                let (cmd, args) = match extract_command(&resp_data) {
-                    Ok((cmd, args)) => (cmd, args),
+                let cmd = match extract_command(&resp_data) {
+                    Ok(cmd) => cmd,
                     Err(e) => {
-                        error!("Failed to extract command: {}", e);
+                        if let Err(e) = socket.write_all((e.to_string() + "\r\n").as_bytes()).await {
+                            error!("{}", e);
+                            panic!("Error writing response to the client.");
+                        }
                         return;
                     }
                 };
@@ -87,7 +90,7 @@ impl Server {
                     }
                 };
 
-                if let Err(e) = socket.write_all(res.as_bytes()).await {
+                if let Err(e) = socket.write_all((res + "\r\n").as_bytes()).await {
                     error!("{}", e);
                     panic!("Error writing response to the client.");
                 }

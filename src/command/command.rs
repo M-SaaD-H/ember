@@ -10,7 +10,8 @@ pub enum Command {
     Get(String),
 }
 
-pub fn extract_command(resp: &RespType) -> Result<(Command, Vec<RespType>), Error> {
+// Extract commands from the user input
+pub fn extract_command(resp: &RespType) -> Result<Command, Error> {
     match resp {
         RespType::Array(arr) => {
             if arr.is_empty() {
@@ -25,12 +26,13 @@ pub fn extract_command(resp: &RespType) -> Result<(Command, Vec<RespType>), Erro
             let args: Vec<RespType> = arr.iter().skip(1).cloned().collect();
 
             let command_enum = parse_command(&command, &args)?;
-            Ok((command_enum, args))
+            Ok(command_enum)
         }
         _ => Err(anyhow::anyhow!("Invalid command format.")),
     }
 }
 
+// Create the command enum for the respective input commands
 fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
     match cmd {
         "PING" => Ok(Command::Ping),
