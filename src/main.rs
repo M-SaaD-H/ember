@@ -1,6 +1,8 @@
 mod server;
 mod resp;
 mod command;
+mod config;
+mod database;
 
 use anyhow::Result;
 

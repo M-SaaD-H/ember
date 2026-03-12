@@ -7,8 +7,12 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::command::command::extract_command;
-use crate::command::dispatcher::dispatch;
+use crate::config::client::Client;
+use crate::database::core::DB;
+use crate::command::{
+    dispatcher::dispatch,
+    command::extract_command, 
+};
 use crate::resp::{
     parser::Parser,
     types::RespType
@@ -42,6 +46,10 @@ impl Server {
     // Runs the server in an infinite loop continiously handling
     // incoming connections
     pub async fn run(&mut self) -> Result<()> {
+        // initialize store outside the loop to prevent a new instance
+        // of store to be created for every connection recieved
+        let store = DB::new();
+        
         loop {
             // accpet the incoming connections
             let mut socket = match self.accept_connection().await {
@@ -54,6 +62,9 @@ impl Server {
                     panic!("Error accpeting connection.");
                 }
             };
+
+            // initialize db before spawing a thread
+            let db = store.clone();
 
             // Spawns a new async task to handle the connection
             // This allows the server to handle multiple connections concurrently
@@ -70,6 +81,7 @@ impl Server {
                     Err(e) => RespType::SimpleError(format!("{}", e)),
                 };
 
+                let client = Client::new(db);
                 
                 let cmd = match extract_command(&resp_data) {
                     Ok(cmd) => cmd,
@@ -82,7 +94,7 @@ impl Server {
                     }
                 };
                 
-                let res = match dispatch(cmd) {
+                let res = match dispatch(client, cmd) {
                     Ok(res_str) => res_str,
                     Err(e) => {
                         if let Err(e) = socket.write_all((e.to_string() + "\r\n").as_bytes()).await {
@@ -93,7 +105,9 @@ impl Server {
                     }
                 };
 
-                if let Err(e) = socket.write_all((res + "\r\n").as_bytes()).await {
+                let parsed_res = RespType::BulkString(res);
+
+                if let Err(e) = socket.write_all(&parsed_res.to_bytes()).await {
                     error!("{}", e);
                     panic!("Error writing response to the client.");
                 }

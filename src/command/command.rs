@@ -2,7 +2,7 @@ use anyhow::{Error, Result};
 
 use crate::resp::types::RespType;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Command {
     Ping,
     Echo(String),
