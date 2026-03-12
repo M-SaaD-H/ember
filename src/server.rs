@@ -85,8 +85,11 @@ impl Server {
                 let res = match dispatch(cmd) {
                     Ok(res_str) => res_str,
                     Err(e) => {
-                        error!("{}", e);
-                        panic!("Error: {}", e);
+                        if let Err(e) = socket.write_all((e.to_string() + "\r\n").as_bytes()).await {
+                            error!("{}", e);
+                            panic!("Error writing response to the client.");
+                        }
+                        return;
                     }
                 };
 

@@ -15,7 +15,7 @@ pub fn dispatch(cmd: Command) -> Result<String, Error> {
             Ok("Ok".to_string())
         }
         Command::Get(_key) => {
-            Ok("Got the key".to_string())
+            Ok("key".to_string())
         }
     }
 }
