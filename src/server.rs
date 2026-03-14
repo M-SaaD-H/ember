@@ -105,9 +105,7 @@ impl Server {
                     }
                 };
 
-                let parsed_res = RespType::BulkString(res);
-
-                if let Err(e) = socket.write_all(&parsed_res.to_bytes()).await {
+                if let Err(e) = socket.write_all(&res.to_bytes()).await {
                     error!("{}", e);
                     panic!("Error writing response to the client.");
                 }
