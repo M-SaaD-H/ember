@@ -25,7 +25,7 @@ pub struct Server {
 
 impl Server {
     // Create a new server instance on the given port
-    pub async fn new(port: u16) -> Self {
+    pub async fn new(port: String) -> Self {
         let addr = format!("127.0.0.1:{}", port);
         let listener = match TcpListener::bind(addr).await {
             Ok(listener) => {
