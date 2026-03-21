@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use anyhow::{Error, Result};
 
 use crate::resp::types::RespType;
@@ -6,7 +8,7 @@ use crate::resp::types::RespType;
 pub enum Command {
     Ping,
     Echo(String),
-    Set(String, String),
+    Set(String, String, Option<Instant>),
     Get(String),
 }
 
@@ -49,14 +51,48 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
             }
             
             if let (RespType::BulkString(k), RespType::BulkString(v)) = (&args[0], &args[1]) {
-                Ok(Command::Set(k.clone(), v.clone()))
+                // no expiry
+                if args.len() < 4 {
+                    return Ok(Command::Set(k.clone(), v.clone(), None));
+                }
+
+                let expire_int =
+                    if let (
+                        RespType::BulkString(flag),
+                        RespType::BulkString(expires_at)
+                    ) = (
+                        &args[2], &args[3]
+                    ) {
+                        if flag.to_ascii_uppercase() == "EX" {
+                            match expires_at.parse::<u64>() {
+                                Ok(val) => Some(val * 1000),
+                                Err(_) => None,
+                            }
+                        } else if flag.to_ascii_uppercase() == "PX" {
+                            match expires_at.parse::<u64>() {
+                                Ok(val) => Some(val),
+                                Err(_) => None,
+                            }
+                        } else {
+                            None
+                        }
+                } else {
+                    None
+                };
+
+                let expire = match expire_int {
+                    Some(e) => Some(Instant::now() + Duration::from_millis(e)),
+                    None => None,
+                };
+
+                Ok(Command::Set(k.clone(), v.clone(), expire))
             } else {
                 Err(anyhow::anyhow!("SET arguments must be bulk strings."))
             }
         }
         "GET" => {
-            if let RespType::BulkString(arg) = &args[0] {
-                Ok(Command::Get(arg.clone()))
+            if let RespType::BulkString(k) = &args[0] {
+                Ok(Command::Get(k.clone()))
             } else {
                 Err(anyhow::anyhow!("GET command requires an argument."))
             }
