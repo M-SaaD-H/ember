@@ -93,14 +93,20 @@ impl Parser {
             return Err(anyhow::anyhow!("Invalid value for bulk string"));
         }
 
-        let bulk_str = String::from_utf8(
-            buf[bytes_consumed..bulk_str_end_idx].to_vec()
-        );
-
-        match bulk_str {
-            Ok(str) => Ok((RespType::BulkString(str), bulk_str_end_idx + 2)),
-            Err(_) => Err(anyhow::anyhow!("Invalid value for bulk string.")),
+        if let Some((data, bytes_consumed)) = Self::read_until_crlf(&buf[bytes_consumed..]) {
+            if bytes_consumed != bulk_str_len + 2 { // +2 for "\r\n"
+                return Err(anyhow::anyhow!("Invalid value for bulk string."));
+            }
+            let utf8_str = String::from_utf8(data.to_vec());
+            return match utf8_str {
+                Ok(str) => {
+                    Ok((RespType::BulkString(str), bulk_str_end_idx + 2))
+                },
+                Err(_) => Err(anyhow::anyhow!("Invalid value for bulk string.")),
+            };
         }
+
+        Err(anyhow::anyhow!("Invalid value for bulk string."))
     }
 
     // "*<number-of-elements>\r\n<element-1>...<element-n>""
@@ -129,7 +135,11 @@ impl Parser {
             bytes_consumed += len;
         }
 
-        Ok((RespType::Array(arr), bytes_consumed + 2))
+        if bytes_consumed < buf.len() - 1 {
+            return Err(anyhow::anyhow!("Invalid value for array."));
+        }
+
+        Ok((RespType::Array(arr), bytes_consumed))
     }
 
     fn parse_null(buf: &BytesMut) -> Result<(RespType, usize)> {
