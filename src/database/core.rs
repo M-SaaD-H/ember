@@ -50,7 +50,7 @@ impl DB {
     }
 
     pub fn get(&self, key: String) -> Result<Entry, Error> {
-        let state = match self.data.lock() {
+        let mut state = match self.data.lock() {
             Ok(state) => state,
             Err(e) => {
                 return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
@@ -58,8 +58,23 @@ impl DB {
         };
 
         match state.get(&key) {
-            // Some(RedisObject::String(val)) => Ok(val.clone()),
-            Some(e) => Ok(e.clone()),
+            Some(e) => {
+                if let Some(expires_at) = e.expires_at {
+                    if expires_at < Instant::now() {
+                        println!("expired");
+                        state.remove(&key);
+                        return Ok(Entry {
+                            value: RedisObject::String("nil".to_string()),
+                            expires_at: None
+                        });
+                    } else {
+                        println!("not expired");
+                        return Ok(e.clone());
+                    };
+                }
+
+                Ok(e.clone())
+            },
             None => Ok(Entry {
                 value: RedisObject::String("nil".to_string()),
                 expires_at: None

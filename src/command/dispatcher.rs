@@ -23,16 +23,7 @@ pub fn dispatch(client: Client, cmd: Command) -> Result<RespType, Error> {
         }
         Command::Get(key) => {
             match client.db.get(key) {
-                // Ok(entry) => Ok(RespType::BulkString(val)),
                 Ok(entry) => {
-                    match entry.expires_at {
-                        Some(ex) => {
-                            println!("ex: {:?}", ex);
-                        },
-                        None => {
-                            println!("No ex");
-                        }
-                    }
                     match entry.value {
                         RedisObject::String(s) => Ok(RespType::BulkString(s)),
                     }
