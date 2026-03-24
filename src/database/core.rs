@@ -31,18 +31,22 @@ impl DB {
         }
     }
 
-    pub fn set(&self, key: String, val: RedisObject) -> Result<(), Error> {
+    pub fn set(&self, key: &String, val: RedisObject, expires_at: Option<Instant>) -> Result<(), Error> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
                 return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
             },
         };
-        state.data.insert(key, val);
+        state.data.insert(key.clone(), val);
+        match expires_at {
+            Some(exp) => state.expirations.insert(key.clone(), exp),
+            None => state.expirations.remove(key),
+        };
         Ok(())
     }
 
-    pub fn get(&self, key: String) -> Result<RedisObject, Error> {
+    pub fn get(&self, key: &String) -> Result<RedisObject, Error> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -50,21 +54,26 @@ impl DB {
             },
         };
 
-        match state.data.get(&key) {
-            Some(e) => {
-                if let Some(expires_at) = state.expirations.get(&key) {
-                    if expires_at < &Instant::now() {
-                        state.data.remove(&key);
-                        return Ok(RedisObject::String("nil".to_string()));
-                    } else {
-                        println!("not expired");
-                        return Ok(e.clone());
-                    };
-                }
+        match state.data.get(key) {
+            Some(ro) => {
+                if self.is_expired(&state, key).unwrap() {
+                    state.data.remove(key);
+                    return Ok(RedisObject::String("nil".to_string()));
+                };
 
-                Ok(e.clone())
+                Ok(ro.clone())
             },
             None => Ok(RedisObject::String("nil".to_string())),
         }
+    }
+
+    // Expirations funcs
+
+    fn is_expired(&self, state: &State, key: &String) -> Result<bool, Error> {
+        if let Some(expires_at) = state.expirations.get(key) {
+            return Ok(expires_at < &Instant::now());
+        }
+
+        Ok(false)
     }
 }
