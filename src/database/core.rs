@@ -12,61 +12,50 @@ pub enum RedisObject {
 }
 
 #[derive(Clone)]
-pub struct Entry {
-    pub value: RedisObject,
-    pub expires_at: Option<Instant>, // in millis
-}
-
-impl Entry {
-    pub fn new(value: RedisObject, expires_at: Option<Instant>) -> Entry {
-        Entry {
-            value,
-            expires_at
-        }
-    }
-}
-
-#[derive(Clone)]
 pub struct DB {
-    data: Arc<Mutex<HashMap<String, Entry>>>
+    state: Arc<Mutex<State>>,
+}
+
+pub struct State {
+    data: HashMap<String, RedisObject>,
+    expirations: HashMap<String, Instant>,
 }
 
 impl DB {
     pub fn new() -> DB {
         DB {
-            data: Arc::new(Mutex::new(HashMap::<String, Entry>::new())),
+            state: Arc::new(Mutex::new(State {
+                data: HashMap::new(),
+                expirations: HashMap::new(),
+            })),
         }
     }
 
-    pub fn set(&self, key: String, entry: Entry) -> Result<(), Error> {
-        let mut state = match self.data.lock() {
+    pub fn set(&self, key: String, val: RedisObject) -> Result<(), Error> {
+        let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
                 return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
             },
         };
-        state.insert(key, entry);
+        state.data.insert(key, val);
         Ok(())
     }
 
-    pub fn get(&self, key: String) -> Result<Entry, Error> {
-        let mut state = match self.data.lock() {
+    pub fn get(&self, key: String) -> Result<RedisObject, Error> {
+        let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
                 return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
             },
         };
 
-        match state.get(&key) {
+        match state.data.get(&key) {
             Some(e) => {
-                if let Some(expires_at) = e.expires_at {
-                    if expires_at < Instant::now() {
-                        println!("expired");
-                        state.remove(&key);
-                        return Ok(Entry {
-                            value: RedisObject::String("nil".to_string()),
-                            expires_at: None
-                        });
+                if let Some(expires_at) = state.expirations.get(&key) {
+                    if expires_at < &Instant::now() {
+                        state.data.remove(&key);
+                        return Ok(RedisObject::String("nil".to_string()));
                     } else {
                         println!("not expired");
                         return Ok(e.clone());
@@ -75,10 +64,7 @@ impl DB {
 
                 Ok(e.clone())
             },
-            None => Ok(Entry {
-                value: RedisObject::String("nil".to_string()),
-                expires_at: None
-            }),
+            None => Ok(RedisObject::String("nil".to_string())),
         }
     }
 }
