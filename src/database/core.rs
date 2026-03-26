@@ -1,4 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, Mutex}, time::Instant};
+use rand::prelude::*;
+use tokio;
 
 use anyhow::{Error, Result};
 
@@ -15,6 +17,9 @@ pub enum RedisObject {
 pub struct DB {
     state: Arc<Mutex<State>>,
 }
+// Arc -> shared ownership
+// Mutex -> thread safe mutation
+//          (ensures only one thread mutates the state at a time)
 
 pub struct State {
     data: HashMap<String, RedisObject>,
@@ -23,12 +28,26 @@ pub struct State {
 
 impl DB {
     pub fn new() -> DB {
-        DB {
+        let db = DB {
             state: Arc::new(Mutex::new(State {
                 data: HashMap::new(),
                 expirations: HashMap::new(),
             })),
-        }
+        };
+
+        let db_clone = db.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = db_clone.active_expiration_cycle() {
+                    eprintln!("Error running active expiration: {:?}", e);
+                }
+    
+                // running active expiration cycle every 3 sec.
+                tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+            }
+        });
+
+        db
     }
 
     pub fn set(&self, key: &String, val: RedisObject, expires_at: Option<Instant>) -> Result<(), Error> {
@@ -75,5 +94,45 @@ impl DB {
         }
 
         Ok(false)
+    }
+
+    fn active_expiration_cycle(&self) -> Result<(), Error> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
+            },
+        };
+
+        let sample_size = 20;
+        let mut expired = 0;
+
+        // getting keys in every active expiration cycle is a good design choice
+        // will be improving it later.
+        let keys: Vec<String> = state.expirations.keys().cloned().collect();
+
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let mut rng = rand::rng();
+
+        for _ in 0..sample_size {
+            let n = rng.random::<u32>() as usize;
+            let idx = n % keys.len();
+            let k = &keys[idx];
+
+            if self.is_expired(&state, k).unwrap() {
+                state.data.remove(k);
+                state.expirations.remove(k);
+                expired += 1;
+            }
+        }
+
+        if (expired as f64 / sample_size as f64) > 0.25 {
+            return Ok(self.active_expiration_cycle().unwrap());
+        }
+
+        Ok(())
     }
 }
