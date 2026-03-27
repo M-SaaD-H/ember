@@ -50,7 +50,7 @@ impl DB {
         db
     }
 
-    pub fn set(&self, key: &String, val: RedisObject, expires_at: Option<Instant>) -> Result<(), Error> {
+    pub fn set(&self, key: String, val: RedisObject, expires_at: Option<Instant>) -> Result<(), Error> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -60,12 +60,12 @@ impl DB {
         state.data.insert(key.clone(), val);
         match expires_at {
             Some(exp) => state.expirations.insert(key.clone(), exp),
-            None => state.expirations.remove(key),
+            None => state.expirations.remove(&key),
         };
         Ok(())
     }
 
-    pub fn get(&self, key: &String) -> Result<RedisObject, Error> {
+    pub fn get(&self, key: String) -> Result<RedisObject, Error> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -73,10 +73,10 @@ impl DB {
             },
         };
 
-        match state.data.get(key) {
+        match state.data.get(&key) {
             Some(ro) => {
-                if self.is_expired(&state, key).unwrap() {
-                    state.data.remove(key);
+                if self.is_expired(&state, &key).unwrap() {
+                    state.data.remove(&key);
                     return Ok(RedisObject::String("nil".to_string()));
                 };
 
@@ -84,6 +84,50 @@ impl DB {
             },
             None => Ok(RedisObject::String("nil".to_string())),
         }
+    }
+
+    pub fn expire(&self, key: String, expires_at: Instant, option: Option<String>) -> Result<(), Error> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
+            },
+        };
+
+        if !state.data.contains_key(&key) {
+            return Err(anyhow::anyhow!("Entry not found."));
+        };
+
+        let update_expiry= match option {
+            Some(opt) => match opt.as_str() {
+                "NX" => {
+                    !state.expirations.contains_key(&key)
+                },
+                "XX" => {
+                    state.expirations.contains_key(&key)
+                },
+                "GT" => {
+                    match state.expirations.get(&key) {
+                        Some(existing_expiry) => expires_at > *existing_expiry,
+                        None => false,
+                    }
+                },
+                "LT" => {
+                    match state.expirations.get(&key) {
+                        Some(existing_expiry) => expires_at < *existing_expiry,
+                        None => false,
+                    }
+                },
+                _ => return Err(anyhow::anyhow!("Invalid option for expire command.")),
+            },
+            None => true,
+        };
+
+        if update_expiry {
+            state.expirations.insert(key, expires_at);
+        }
+
+        Ok(())
     }
 
     // Expirations funcs

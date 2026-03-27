@@ -16,14 +16,20 @@ pub fn dispatch(client: Client, cmd: Command) -> Result<RespType, Error> {
         }
         Command::Set(key, value, expires_in) => {
             let val = RedisObject::String(value);
-            match client.db.set(&key, val, expires_in) {
+            match client.db.set(key, val, expires_in) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
         Command::Get(key) => {
-            match client.db.get(&key) {
+            match client.db.get(key) {
                 Ok(RedisObject::String(s)) => Ok(RespType::BulkString(s)),
+                Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
+            }
+        }
+        Command::Expire(key, expires_at, option) => {
+            match client.db.expire(key, expires_at, option) {
+                Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }

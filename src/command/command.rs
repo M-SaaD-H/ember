@@ -7,9 +7,11 @@ use crate::resp::types::RespType;
 #[derive(Debug, Clone)]
 pub enum Command {
     Ping,
-    Echo(String),
-    Set(String, String, Option<Instant>),
-    Get(String),
+    Echo(String),                                // (msg)
+    Set(String, String, Option<Instant>),        // (key, val, Option<expires_in>)
+    Get(String),                                 // (key)
+
+    Expire(String, Instant, Option<String>)      // (key, expires_in, Option<NX | XX | GT | LT>)
 }
 
 // Extract commands from the user input
@@ -89,6 +91,36 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                 Ok(Command::Get(k.clone()))
             } else {
                 Err(anyhow::anyhow!("GET command requires an argument."))
+            }
+        }
+
+        "EXPIRE" => {
+            if let (
+                RespType::BulkString(k),
+                RespType::Integer(expires_in),
+            ) = (
+                &args[0],
+                &args[1]
+            ) {
+                let option: Option<String> =
+                    if args.len() > 2 {
+                        if let RespType::BulkString(opt) = &args[2] {
+                            match opt.as_str() {
+                                "NX" | "XX" | "GT" | "LT" => Some(opt.to_string()),
+                                _ => return Err(anyhow::anyhow!("Invalid option in expire command. Only NX, XX, GT, LT are supported.")),
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                let expires_at = Instant::now() + Duration::from_millis(*expires_in as u64);
+
+                Ok(Command::Expire(k.clone(), expires_at.clone(), option))
+            } else {
+                Err(anyhow::anyhow!("EXPIRE command requires an argument."))
             }
         }
         _ => Err(anyhow::anyhow!("Unknown command.")),
