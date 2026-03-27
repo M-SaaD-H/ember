@@ -14,9 +14,9 @@ pub fn dispatch(client: Client, cmd: Command) -> Result<RespType, Error> {
         Command::Echo(message) => {
             Ok(RespType::BulkString(message))
         }
-        Command::Set(key, value, expires_at) => {
+        Command::Set(key, value, expires_in) => {
             let val = RedisObject::String(value);
-            match client.db.set(&key, val, expires_at) {
+            match client.db.set(&key, val, expires_in) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }

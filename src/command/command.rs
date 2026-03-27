@@ -56,23 +56,17 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                     return Ok(Command::Set(k.clone(), v.clone(), None));
                 }
 
-                let expire_int =
+                let expires_in_millis =
                     if let (
                         RespType::BulkString(flag),
-                        RespType::BulkString(expires_at)
+                        RespType::Integer(expires_in)
                     ) = (
                         &args[2], &args[3]
                     ) {
                         if flag.to_ascii_uppercase() == "EX" {
-                            match expires_at.parse::<u64>() {
-                                Ok(val) => Some(val * 1000),
-                                Err(_) => None,
-                            }
+                            Some(*expires_in * 1000)
                         } else if flag.to_ascii_uppercase() == "PX" {
-                            match expires_at.parse::<u64>() {
-                                Ok(val) => Some(val),
-                                Err(_) => None,
-                            }
+                            Some(*expires_in)
                         } else {
                             None
                         }
@@ -80,12 +74,12 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                     None
                 };
 
-                let expire = match expire_int {
-                    Some(e) => Some(Instant::now() + Duration::from_millis(e)),
+                let expires_at = match expires_in_millis {
+                    Some(e) => Some(Instant::now() + Duration::from_millis(e as u64)),
                     None => None,
                 };
 
-                Ok(Command::Set(k.clone(), v.clone(), expire))
+                Ok(Command::Set(k.clone(), v.clone(), expires_at))
             } else {
                 Err(anyhow::anyhow!("SET arguments must be bulk strings."))
             }
