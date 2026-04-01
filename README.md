@@ -13,6 +13,7 @@ More Redis features will be added over time.
   - `PING` → `PONG`
   - `ECHO <message>` → bulk string reply
   - `SET key value` and `SET key value EX seconds` / `PX milliseconds` for optional expiry
+  - `EXPIRE key expires_in <NX | XX | GT | LT>` to set expiry on existing keys
   - `GET key` → bulk string (missing keys are not yet identical to Redis’s null reply)
 
 You can talk to it with **`redis-cli`** like a real Redis instance for these commands.
