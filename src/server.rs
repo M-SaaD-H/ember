@@ -80,9 +80,7 @@ impl Server {
                     Ok((data, _)) => data,
                     Err(e) => RespType::SimpleError(format!("{}", e)),
                 };
-
-                let client = Client::new(db);
-                
+                                
                 let cmd = match extract_command(&resp_data) {
                     Ok(cmd) => cmd,
                     Err(e) => {
@@ -93,6 +91,8 @@ impl Server {
                         return;
                     }
                 };
+
+                let client = Client::new(db);
                 
                 let res = match dispatch(client, cmd) {
                     Ok(res_str) => res_str,
