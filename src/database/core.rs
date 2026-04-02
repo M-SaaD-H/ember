@@ -114,6 +114,32 @@ impl DB {
         
         Ok(())
     }
+
+    pub fn rpush(&self, key: String, values: Vec<RedisObject>) -> Result<(), Error> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
+            },
+        };
+        
+        if !state.data.contains_key(&key) {
+            state.data.insert(key.clone(), RedisObject::List(values));
+        } else {
+            match state.data.get_mut(&key) {
+                Some(RedisObject::List(list)) => {
+                    list.extend(values);
+                }
+                Some(RedisObject::String(_)) => return Err(anyhow::anyhow!("Wrong data type. Expected List, got String.")),
+                None => {
+                    return Err(anyhow::anyhow!("Entry not found."));
+                }
+            };
+            
+        }
+        
+        Ok(())
+    }
     
     pub fn lrange(&self, key: String, mut start: i32, mut stop: i32) -> Result<RedisObject, Error> {
         let mut state = match self.state.lock() {

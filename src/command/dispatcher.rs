@@ -41,6 +41,13 @@ pub fn dispatch(client: Client, cmd: Command) -> Result<RespType, Error> {
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
+        Command::RPush(key, vals) => {
+            let values = vals.iter().map(|v| RedisObject::String(v.clone())).collect();
+            match client.db.rpush(key, values) {
+                Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
+                Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
+            }
+        }
         Command::LRange(key, start, stop ) => {
             match client.db.lrange(key, start, stop) {
                 Ok(RedisObject::List(list)) => {
