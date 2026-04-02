@@ -41,7 +41,6 @@ impl RespType {
                 let mut arr_str = format!("*{}\r\n", arr.len());
 
                 for a in arr {
-                    println!("{}", a.to_string());
                     arr_str.push_str(a.to_string().as_str());
                 }
 

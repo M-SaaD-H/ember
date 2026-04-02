@@ -84,7 +84,7 @@ impl DB {
             None => Ok(RedisObject::String("nil".to_string())),
         }
     }
-
+    
     pub fn lpush(&self, key: String, values: Vec<RedisObject>) -> Result<(), Error> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
@@ -109,10 +109,48 @@ impl DB {
                     return Err(anyhow::anyhow!("Entry not found."));
                 }
             };
-
+            
         }
-
+        
         Ok(())
+    }
+    
+    pub fn lrange(&self, key: String, mut start: i32, mut stop: i32) -> Result<RedisObject, Error> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
+            },
+        };
+        
+        match state.data.get(&key) {
+            Some(ro) => {
+                if self.is_expired(&state, &key).unwrap() {
+                    state.data.remove(&key);
+                    return Ok(RedisObject::String("nil".to_string()));
+                };
+    
+                if let RedisObject::List(list) = ro {
+                    // negetive start and stop represents the index from end
+                    if start < 0 {
+                        start += list.len() as i32;
+                    }
+                    if stop < 0 {
+                        stop += list.len() as i32;
+                    }
+
+                    let vals: Vec<RedisObject> = list.iter()
+                        .enumerate()
+                        .filter(|(idx, _)| *idx >= start as usize && *idx <= stop as usize)
+                        .map(|(_, v)| v.clone())
+                        .collect();
+                    return Ok(RedisObject::List(vals));
+                } else {
+                    Err(anyhow::anyhow!("Wrong type. Expected list."))
+                }
+            },
+            None => Ok(RedisObject::String("nil".to_string())),
+        }
     }
 
     pub fn expire(&self, key: String, expires_at: Instant, option: Option<String>) -> Result<(), Error> {

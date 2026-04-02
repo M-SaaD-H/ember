@@ -41,5 +41,22 @@ pub fn dispatch(client: Client, cmd: Command) -> Result<RespType, Error> {
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
+        Command::LRange(key, start, stop ) => {
+            match client.db.lrange(key, start, stop) {
+                Ok(RedisObject::List(list)) => {
+                    Ok(RespType::Array(
+                        list.iter().filter_map(|item| {
+                            if let RedisObject::String(s) = item {
+                                Some(RespType::BulkString(s.clone()))
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    ))
+                },
+                Ok(_) => Err(anyhow::anyhow!("Unexpected Error: expected list")),
+                Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
+            }
+        }
     }
 }

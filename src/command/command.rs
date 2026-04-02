@@ -12,6 +12,7 @@ pub enum Command {
     Get(String),                                 // (key)
 
     LPush(String, Vec<String>),                  // (key, values)
+    LRange(String, i32, i32),                    // (key, start, stop)
     Expire(String, Instant, Option<String>),     // (key, expires_in, Option<NX | XX | GT | LT>)
 }
 
@@ -113,6 +114,21 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                     Err(anyhow::anyhow!("LPUSH command requires an array of values."))
                 }
             } else {
+                Err(anyhow::anyhow!("LPUSH command requires an argument."))
+            }
+        }
+        "LRANGE" => {
+            if let (
+                RespType::BulkString(key),
+                RespType::Integer(start),
+                RespType::Integer(stop),
+            ) = (
+                &args[0],
+                &args[1],
+                &args[2],
+            ) {
+                Ok(Command::LRange(key.clone(), start.clone(), stop.clone()))
+            } else {    
                 Err(anyhow::anyhow!("LPUSH command requires an argument."))
             }
         }
