@@ -24,11 +24,19 @@ pub fn dispatch(client: Client, cmd: Command) -> Result<RespType, Error> {
         Command::Get(key) => {
             match client.db.get(key) {
                 Ok(RedisObject::String(s)) => Ok(RespType::BulkString(s)),
+                Ok(RedisObject::List(_)) => Err(anyhow::anyhow!("Wrong data type. Expected String, got List.")),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
         Command::Expire(key, expires_at, option) => {
             match client.db.expire(key, expires_at, option) {
+                Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
+                Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
+            }
+        }
+        Command::LPush(key, vals) => {
+            let values = vals.iter().map(|v| RedisObject::String(v.clone())).collect();
+            match client.db.lpush(key, values) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }

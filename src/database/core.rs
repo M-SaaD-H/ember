@@ -7,8 +7,7 @@ use anyhow::{Error, Result};
 #[derive(Clone)]
 pub enum RedisObject {
     String(String),
-    // Add these later
-    // List(Vec<RedisObject>),
+    List(Vec<RedisObject>),
     // Stream,
     // SortedSet,
 }
@@ -84,6 +83,36 @@ impl DB {
             },
             None => Ok(RedisObject::String("nil".to_string())),
         }
+    }
+
+    pub fn lpush(&self, key: String, values: Vec<RedisObject>) -> Result<(), Error> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
+            },
+        };
+        
+        if !state.data.contains_key(&key) {
+            state.data.insert(key.clone(), RedisObject::List(values));
+        } else {
+            match state.data.get(&key) {
+                Some(RedisObject::List(list)) => {
+                    let mut l = list.clone();
+                    for val in values {
+                        l.insert(0, val);
+                    }
+                    state.data.insert(key.clone(), RedisObject::List(l));
+                }
+                Some(RedisObject::String(_)) => return Err(anyhow::anyhow!("Wrong data type. Expected List, got String.")),
+                None => {
+                    return Err(anyhow::anyhow!("Entry not found."));
+                }
+            };
+
+        }
+
+        Ok(())
     }
 
     pub fn expire(&self, key: String, expires_at: Instant, option: Option<String>) -> Result<(), Error> {

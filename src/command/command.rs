@@ -11,7 +11,8 @@ pub enum Command {
     Set(String, String, Option<Instant>),        // (key, val, Option<expires_in>)
     Get(String),                                 // (key)
 
-    Expire(String, Instant, Option<String>)      // (key, expires_in, Option<NX | XX | GT | LT>)
+    LPush(String, Vec<String>),                  // (key, values)
+    Expire(String, Instant, Option<String>),     // (key, expires_in, Option<NX | XX | GT | LT>)
 }
 
 // Extract commands from the user input
@@ -93,7 +94,28 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                 Err(anyhow::anyhow!("GET command requires an argument."))
             }
         }
-
+        "LPUSH" => {
+            if let RespType::BulkString(k) = &args[0] {
+                if let RespType::BulkString(v) = &args[1] {
+                    Ok(Command::LPush(k.clone(), vec![v.clone()]))
+                } else if let RespType::Array(values) = &args[1] {
+                    Ok(Command::LPush(
+                        k.clone(),
+                        values.iter().filter_map(|v| {
+                            if let RespType::BulkString(bs) = v {
+                                Some(bs.clone())
+                            } else {
+                                None
+                            }
+                        }).collect(),
+                    ))
+                } else {
+                    Err(anyhow::anyhow!("LPUSH command requires an array of values."))
+                }
+            } else {
+                Err(anyhow::anyhow!("LPUSH command requires an argument."))
+            }
+        }
         "EXPIRE" => {
             if let (
                 RespType::BulkString(k),
