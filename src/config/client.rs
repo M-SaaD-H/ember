@@ -5,7 +5,9 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(db: DB) -> Client {
-        Client { db }
+    pub fn new() -> Client {
+        Client {
+            db: DB::new(),
+        }
     }
 }

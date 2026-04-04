@@ -6,7 +6,7 @@ use crate::database::core::RedisObject;
 use crate::resp::types::RespType;
 
 // Dispatch the commands (execute the command)
-pub fn dispatch(client: Client, cmd: Command) -> Result<RespType, Error> {
+pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
     match cmd {
         Command::Ping => {
             Ok(RespType::SimpleString("Pong".to_string()))

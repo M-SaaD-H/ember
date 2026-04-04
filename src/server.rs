@@ -8,7 +8,6 @@ use tokio::{
 };
 
 use crate::config::client::Client;
-use crate::database::core::DB;
 use crate::command::{
     dispatcher::dispatch,
     command::extract_command, 
@@ -46,13 +45,9 @@ impl Server {
     // Runs the server in an infinite loop continiously handling
     // incoming connections
     pub async fn run(&mut self) -> Result<()> {
-        // initialize store outside the loop to prevent a new instance
-        // of store to be created for every connection recieved
-        let store = DB::new();
-        
         loop {
             // accpet the incoming connections
-            let mut socket = match self.accept_connection().await {
+            let socket = match self.accept_connection().await {
                 Ok(stream) => stream,
                 Err(e) => {
                     // Log the error and panic the thread
@@ -63,53 +58,60 @@ impl Server {
                 }
             };
 
-            // initialize db before spawing a thread
-            let db = store.clone();
-
             // Spawns a new async task to handle the connection
             // This allows the server to handle multiple connections concurrently
             tokio::spawn(async move {
-                // read the TCP message and store the raw bytes in the buffer
-                let mut buf = BytesMut::with_capacity(512);
-                if let Err(e) = socket.read_buf(&mut buf).await {
-                    panic!("Error reading request: {}", e);
-                }
-
-                // parse the RESP data from the the buffer
-                let resp_data = match Parser::parse(&buf) {
-                    Ok((data, _)) => data,
-                    Err(e) => RespType::SimpleError(format!("{}", e)),
-                };
-                                
-                let cmd = match extract_command(&resp_data) {
-                    Ok(cmd) => cmd,
-                    Err(e) => {
-                        if let Err(e) = socket.write_all((e.to_string() + "\r\n").as_bytes()).await {
-                            error!("{}", e);
-                            panic!("Error writing response to the client.");
-                        }
-                        return;
-                    }
-                };
-
-                let client = Client::new(db);
-                
-                let res = match dispatch(client, cmd) {
-                    Ok(res_str) => res_str,
-                    Err(e) => {
-                        if let Err(e) = socket.write_all((e.to_string() + "\r\n").as_bytes()).await {
-                            error!("{}", e);
-                            panic!("Error writing response to the client.");
-                        }
-                        return;
-                    }
-                };
-
-                if let Err(e) = socket.write_all(&res.to_bytes()).await {
-                    error!("{}", e);
-                    panic!("Error writing response to the client.");
-                }
+                Server::handle_client(socket).await
             });
+        }
+    }
+    
+    async fn handle_client(mut socket: TcpStream) {
+        // read the TCP message and store the raw bytes in the buffer
+        let mut buf = BytesMut::with_capacity(512);
+        let mut client = Client::new();
+
+        loop {
+            buf.clear();
+            if let Err(e) = socket.read_buf(&mut buf).await {
+                error!("Error reading request: {}", e);
+                break;
+            }
+            
+            // parse the RESP data from the buffer
+            let resp_data = match Parser::parse(&buf) {
+                Ok((data, _)) => data,
+                Err(e) => RespType::SimpleError(format!("{}", e)),
+            };
+
+            let cmd = match extract_command(&resp_data) {
+                Ok(cmd) => cmd,
+                Err(e) => {
+                    error!("E: {}", e);
+                    if let Err(e) = socket.write_all(&RespType::SimpleError(e.to_string()).to_bytes()).await {
+                        error!("Error writing to the client. E: {}", e);
+                        break;
+                    }
+                    return;
+                }
+            };
+
+            // Pass mutable reference to client to avoid move in each iteration
+            let res = match dispatch(&mut client, cmd) {
+                Ok(res_str) => res_str,
+                Err(e) => {
+                    if let Err(e) = socket.write_all(&RespType::SimpleError(e.to_string()).to_bytes()).await {
+                        error!("Error writing to the client. E: {}", e);
+                        break;
+                    }
+                    return;
+                }
+            };
+            
+            if let Err(e) = socket.write_all(&res.to_bytes()).await {
+                error!("Error writing response to the client. E: {}", e);
+                break;
+            }
         }
     }
 

@@ -184,6 +184,8 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                 Err(anyhow::anyhow!("EXPIRE command requires an argument."))
             }
         }
+        // this is for redis-cli as it sends the default command as "COMMAND DOCS".
+        "COMMAND" => Ok(Command::Ping),
         _ => Err(anyhow::anyhow!("Unknown command.")),
     }
 }
