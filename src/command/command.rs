@@ -15,6 +15,10 @@ pub enum Command {
     RPush(String, Vec<String>),                  // (key, values)
     LRange(String, i32, i32),                    // (key, start, stop)
     Expire(String, Instant, Option<String>),     // (key, expires_in, Option<NX | XX | GT | LT>)
+
+    MULTI,
+    DISCARD,
+    EXEC,
 }
 
 // Extract commands from the user input
@@ -184,6 +188,17 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                 Err(anyhow::anyhow!("EXPIRE command requires an argument."))
             }
         }
+        
+        "MULTI" => {
+            Ok(Command::MULTI)
+        }
+        "DISCARD" => {
+            Ok(Command::DISCARD)
+        }
+        "EXEC" => {
+            Ok(Command::EXEC)
+        }
+        
         // this is for redis-cli as it sends the default command as "COMMAND DOCS".
         "COMMAND" => Ok(Command::Ping),
         _ => Err(anyhow::anyhow!("Unknown command.")),

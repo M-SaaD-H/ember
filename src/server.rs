@@ -8,6 +8,8 @@ use tokio::{
 };
 
 use crate::config::client::Client;
+use crate::command::command::Command;
+use crate::database::core::DB;
 use crate::command::{
     dispatcher::dispatch,
     command::extract_command, 
@@ -45,6 +47,10 @@ impl Server {
     // Runs the server in an infinite loop continiously handling
     // incoming connections
     pub async fn run(&mut self) -> Result<()> {
+        // initialize store outside the loop to prevent a new instance
+        // of store to be created for every connection recieved
+        let store = DB::new();
+        
         loop {
             // accpet the incoming connections
             let socket = match self.accept_connection().await {
@@ -57,6 +63,9 @@ impl Server {
                     panic!("Error accpeting connection.");
                 }
             };
+
+            // initialize db before spawing a thread
+            let db = store.clone();
 
             // Spawns a new async task to handle the connection
             // This allows the server to handle multiple connections concurrently
@@ -95,22 +104,21 @@ impl Server {
                     return;
                 }
             };
-
-            // Pass mutable reference to client to avoid move in each iteration
+                
             let res = match dispatch(&mut client, cmd) {
                 Ok(res_str) => res_str,
                 Err(e) => {
-                    if let Err(e) = socket.write_all(&RespType::SimpleError(e.to_string()).to_bytes()).await {
-                        error!("Error writing to the client. E: {}", e);
-                        break;
+                    if let Err(e) = socket.write_all((e.to_string() + "\r\n").as_bytes()).await {
+                        error!("{}", e);
+                        panic!("Error writing response to the client.");
                     }
                     return;
                 }
             };
-            
+
             if let Err(e) = socket.write_all(&res.to_bytes()).await {
-                error!("Error writing response to the client. E: {}", e);
-                break;
+                error!("{}", e);
+                panic!("Error writing response to the client.");
             }
         }
     }

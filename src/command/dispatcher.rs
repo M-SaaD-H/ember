@@ -7,6 +7,11 @@ use crate::resp::types::RespType;
 
 // Dispatch the commands (execute the command)
 pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
+    if client.in_transaction {
+        client.queued_commands.push(cmd);
+        return Ok(RespType::SimpleString(String::from("QUEUED")));
+    }
+
     match cmd {
         Command::Ping => {
             Ok(RespType::SimpleString("Pong".to_string()))
@@ -64,6 +69,32 @@ pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
                 Ok(_) => Err(anyhow::anyhow!("Unexpected Error: expected list")),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
+        }
+
+        Command::MULTI => {
+            client.in_transaction = true;
+            println!("cl in tr: {}", client.in_transaction);
+
+            Ok(RespType::SimpleString("Ok".to_string()))
+        }
+        Command::DISCARD => {
+            client.in_transaction = false;
+            client.queued_commands.clear();
+
+            Ok(RespType::SimpleString("Ok".to_string()))
+        }
+        Command::EXEC => {
+            let mut replies: Vec<RespType> = Vec::new();
+            let queued_cmds = client.queued_commands.clone();
+            for c in queued_cmds {
+                match dispatch(client, c) {
+                    Ok(rep) => replies.push(rep),
+                    Err(e) => return Err(anyhow::anyhow!("Failed to execute queued commands. E: {}", e)),
+                }
+            }
+            client.in_transaction = false;
+            client.queued_commands.clear();
+            Ok(RespType::Array(replies))
         }
     }
 }
