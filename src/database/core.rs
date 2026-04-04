@@ -56,6 +56,12 @@ impl DB {
                 return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
             },
         };
+
+        // if the key is replacing with a new value remove it's its expirations too.
+        if state.expirations.contains_key(&key) {
+            state.expirations.remove(&key);
+        }
+
         state.data.insert(key.clone(), val);
         match expires_at {
             Some(exp) => state.expirations.insert(key.clone(), exp),
