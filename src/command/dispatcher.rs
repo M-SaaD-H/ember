@@ -9,7 +9,7 @@ use crate::resp::types::RespType;
 pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
     // check for transaction
     if client.in_transaction {
-        if matches!(cmd, Command::EXEC) {
+        if matches!(cmd, Command::EXEC | Command::DISCARD) {
             return execute_command(client, cmd);
         }
 
@@ -100,7 +100,7 @@ fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType, Error>
             let mut replies: Vec<RespType> = Vec::new();
             let queued_cmds = client.queued_commands.clone();
             for c in queued_cmds {
-                match dispatch(client, c) {
+                match execute_command(client, c) {
                     Ok(rep) => replies.push(rep),
                     Err(e) => return Err(anyhow::anyhow!("Failed to execute queued commands. E: {}", e)),
                 }
