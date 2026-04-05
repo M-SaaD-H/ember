@@ -8,8 +8,6 @@ use tokio::{
 };
 
 use crate::config::client::Client;
-use crate::command::command::Command;
-use crate::database::core::DB;
 use crate::command::{
     dispatcher::dispatch,
     command::extract_command, 
@@ -46,11 +44,7 @@ impl Server {
 
     // Runs the server in an infinite loop continiously handling
     // incoming connections
-    pub async fn run(&mut self) -> Result<()> {
-        // initialize store outside the loop to prevent a new instance
-        // of store to be created for every connection recieved
-        let store = DB::new();
-        
+    pub async fn run(&mut self) -> Result<()> {        
         loop {
             // accpet the incoming connections
             let socket = match self.accept_connection().await {
@@ -63,9 +57,6 @@ impl Server {
                     panic!("Error accpeting connection.");
                 }
             };
-
-            // initialize db before spawing a thread
-            let db = store.clone();
 
             // Spawns a new async task to handle the connection
             // This allows the server to handle multiple connections concurrently
@@ -92,7 +83,7 @@ impl Server {
                 Ok((data, _)) => data,
                 Err(e) => RespType::SimpleError(format!("{}", e)),
             };
-
+            
             let cmd = match extract_command(&resp_data) {
                 Ok(cmd) => cmd,
                 Err(e) => {
@@ -104,7 +95,7 @@ impl Server {
                     return;
                 }
             };
-                
+            
             let res = match dispatch(&mut client, cmd) {
                 Ok(res_str) => res_str,
                 Err(e) => {

@@ -58,7 +58,7 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
             if args.len() < 2 {
                 return Err(anyhow::anyhow!("SET command requires two arguments."));
             }
-            
+
             if let (RespType::BulkString(k), RespType::BulkString(v)) = (&args[0], &args[1]) {
                 // no expiry
                 if args.len() < 4 {
@@ -68,14 +68,19 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                 let expires_in_millis =
                     if let (
                         RespType::BulkString(flag),
-                        RespType::Integer(expires_in)
+                        RespType::BulkString(expires_in)
                     ) = (
                         &args[2], &args[3]
                     ) {
+                        let expires_in_int = match expires_in.parse::<u64>() {
+                            Ok(i) => i,
+                            Err(e) => return Err(anyhow::anyhow!("Error while parsing int. E: {}", e)),
+                        };
+
                         if flag.to_ascii_uppercase() == "EX" {
-                            Some(*expires_in * 1000)
+                            Some(expires_in_int * 1000)
                         } else if flag.to_ascii_uppercase() == "PX" {
-                            Some(*expires_in)
+                            Some(expires_in_int)
                         } else {
                             None
                         }
