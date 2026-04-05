@@ -9,11 +9,11 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(db: DB, in_transaction: bool, queued_commands: Vec<Command>) -> Client {
+    pub fn new() -> Client {
         Client {
-            db,
-            in_transaction,
-            queued_commands,
+            db: DB::new(),
+            in_transaction: false,
+            queued_commands: Vec::new(),
         }
     }
 }

@@ -5,13 +5,23 @@ use crate::config::client::Client;
 use crate::database::core::RedisObject;
 use crate::resp::types::RespType;
 
-// Dispatch the commands (execute the command)
+// Dispatch the commands
 pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
+    // check for transaction
     if client.in_transaction {
+        if matches!(cmd, Command::EXEC) {
+            return execute_command(client, cmd);
+        }
+
         client.queued_commands.push(cmd);
         return Ok(RespType::SimpleString(String::from("QUEUED")));
     }
 
+    execute_command(client, cmd)
+}
+
+fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
+    // execute commands
     match cmd {
         Command::Ping => {
             Ok(RespType::SimpleString("Pong".to_string()))
@@ -21,6 +31,9 @@ pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
         }
         Command::Set(key, value, expires_in) => {
             let val = RedisObject::String(value);
+            if let Some(exp) = expires_in {
+                println!("exp: {:?}", exp);
+            }
             match client.db.set(key, val, expires_in) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
@@ -73,7 +86,7 @@ pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
 
         Command::MULTI => {
             client.in_transaction = true;
-            println!("cl in tr: {}", client.in_transaction);
+            client.queued_commands.clear();
 
             Ok(RespType::SimpleString("Ok".to_string()))
         }
