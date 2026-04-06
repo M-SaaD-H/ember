@@ -77,6 +77,10 @@ impl Server {
                 error!("Error reading request: {}", e);
                 break;
             }
+
+            if buf.is_empty() {
+                continue;
+            }
             
             // parse the RESP data from the buffer
             let resp_data = match Parser::parse(&buf) {
