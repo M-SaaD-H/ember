@@ -3,6 +3,7 @@ mod resp;
 mod command;
 mod config;
 mod database;
+mod utils;
 
 use anyhow::Result;
 

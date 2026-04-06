@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Error, Result};
 
 use crate::resp::types::RespType;
+use crate::utils::parse_int;
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -72,10 +73,7 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                     ) = (
                         &args[2], &args[3]
                     ) {
-                        let expires_in_int = match expires_in.parse::<u64>() {
-                            Ok(i) => i,
-                            Err(e) => return Err(anyhow::anyhow!("Error while parsing int. E: {}", e)),
-                        };
+                        let expires_in_int = parse_int(expires_in);
 
                         if flag.to_ascii_uppercase() == "EX" {
                             Some(expires_in_int * 1000)
@@ -152,14 +150,16 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
         "LRANGE" => {
             if let (
                 RespType::BulkString(key),
-                RespType::Integer(start),
-                RespType::Integer(stop),
+                RespType::BulkString(start),
+                RespType::BulkString(stop),
             ) = (
                 &args[0],
                 &args[1],
                 &args[2],
             ) {
-                Ok(Command::LRANGE(key.clone(), start.clone(), stop.clone()))
+                let start_int = parse_int(start);
+                let stop_int = parse_int(stop);
+                Ok(Command::LRANGE(key.clone(), start_int, stop_int))
             } else {    
                 Err(anyhow::anyhow!("LPUSH command requires an argument."))
             }
@@ -167,7 +167,7 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
         "EXPIRE" => {
             if let (
                 RespType::BulkString(k),
-                RespType::Integer(expires_in),
+                RespType::BulkString(expires_in),
             ) = (
                 &args[0],
                 &args[1]
@@ -186,7 +186,9 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                         None
                     };
 
-                let expires_at = Instant::now() + Duration::from_millis(*expires_in as u64);
+                let expires_in_int = parse_int(expires_in);
+
+                let expires_at = Instant::now() + Duration::from_millis(expires_in_int as u64);
 
                 Ok(Command::EXPIRE(k.clone(), expires_at.clone(), option))
             } else {
