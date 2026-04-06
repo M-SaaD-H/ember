@@ -105,46 +105,32 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
         }
         "LPUSH" => {
             if let RespType::BulkString(k) = &args[0] {
-                if let RespType::BulkString(v) = &args[1] {
-                    Ok(Command::LPUSH(k.clone(), vec![v.clone()]))
-                } else if let RespType::Array(values) = &args[1] {
-                    Ok(Command::LPUSH(
-                        k.clone(),
-                        values.iter().filter_map(|v| {
-                            if let RespType::BulkString(bs) = v {
-                                Some(bs.clone())
-                            } else {
-                                None
-                            }
-                        }).collect(),
-                    ))
-                } else {
-                    Err(anyhow::anyhow!("LPUSH command requires an array of values."))
+                let mut vec: Vec<String> = Vec::new();
+
+                for i in 1..args.len() {
+                    if let RespType::BulkString(bs) = &args[i] {
+                        vec.push(bs.clone());
+                    }
                 }
+
+                Ok(Command::LPUSH(k.clone(), vec))
             } else {
                 Err(anyhow::anyhow!("LPUSH command requires an argument."))
             }
         }
         "RPUSH" => {
             if let RespType::BulkString(k) = &args[0] {
-                if let RespType::BulkString(v) = &args[1] {
-                    Ok(Command::RPUSH(k.clone(), vec![v.clone()]))
-                } else if let RespType::Array(values) = &args[1] {
-                    Ok(Command::RPUSH(
-                        k.clone(),
-                        values.iter().filter_map(|v| {
-                            if let RespType::BulkString(bs) = v {
-                                Some(bs.clone())
-                            } else {
-                                None
-                            }
-                        }).collect(),
-                    ))
-                } else {
-                    Err(anyhow::anyhow!("RPUSH command requires an array of values."))
+                let mut vec: Vec<String> = Vec::new();
+
+                for i in 1..args.len() {
+                    if let RespType::BulkString(bs) = &args[i] {
+                        vec.push(bs.clone());
+                    }
                 }
+
+                Ok(Command::RPUSH(k.clone(), vec))
             } else {
-                Err(anyhow::anyhow!("RPUSH command requires an argument."))
+                Err(anyhow::anyhow!("LPUSH command requires an argument."))
             }
         }
         "LRANGE" => {
