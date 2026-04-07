@@ -9,6 +9,10 @@ use crate::resp::types::RespType;
 pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
     // check for transaction
     if client.in_transaction {
+        if matches!(cmd, Command::MULTI) {
+            return Err(anyhow::anyhow!("Can not nest multi"));
+        }
+
         if matches!(cmd, Command::EXEC | Command::DISCARD) {
             return execute_command(client, cmd);
         }
