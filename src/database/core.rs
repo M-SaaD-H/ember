@@ -90,6 +90,20 @@ impl DB {
             None => Ok(RedisObject::String("nil".to_string())),
         }
     }
+
+    pub fn delete(&self, key: String) -> Result<(), Error> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
+            },
+        };
+
+        state.data.remove(&key);
+        state.expirations.remove(&key);
+
+        Ok(())
+    }
     
     pub fn lpush(&self, key: String, values: Vec<RedisObject>) -> Result<(), Error> {
         let mut state = match self.state.lock() {

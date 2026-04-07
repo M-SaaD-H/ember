@@ -11,6 +11,7 @@ pub enum Command {
     ECHO(String),                                // (msg)
     SET(String, String, Option<Instant>),        // (key, val, Option<expires_in>)
     GET(String),                                 // (key)
+    DELETE(String),                              // (key)
 
     LPUSH(String, Vec<String>),                  // (key, values)
     RPUSH(String, Vec<String>),                  // (key, values)
@@ -103,6 +104,13 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                 Err(anyhow::anyhow!("GET command requires an argument."))
             }
         }
+        "DELETE" => {
+            if let RespType::BulkString(k) = &args[0] {
+                Ok(Command::DELETE(k.clone()))
+            } else {
+                Err(anyhow::anyhow!("DELETE command requires an argument."))
+            }
+        }
         "LPUSH" => {
             if let RespType::BulkString(k) = &args[0] {
                 let mut vec: Vec<String> = Vec::new();
@@ -130,7 +138,7 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
 
                 Ok(Command::RPUSH(k.clone(), vec))
             } else {
-                Err(anyhow::anyhow!("LPUSH command requires an argument."))
+                Err(anyhow::anyhow!("RPUSH command requires an argument."))
             }
         }
         "LRANGE" => {
@@ -147,7 +155,7 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
                 let stop_int = parse_int(stop);
                 Ok(Command::LRANGE(key.clone(), start_int, stop_int))
             } else {    
-                Err(anyhow::anyhow!("LPUSH command requires an argument."))
+                Err(anyhow::anyhow!("LRANGE command requires an argument."))
             }
         }
         "EXPIRE" => {

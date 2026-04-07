@@ -50,6 +50,12 @@ fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType, Error>
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
+        Command::DELETE(key) => {
+            match client.db.delete(key) {
+                Ok(()) => Ok(RespType::BulkString("Ok".to_string())),
+                Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
+            }
+        }
         Command::EXPIRE(key, expires_at, option) => {
             match client.db.expire(key, expires_at, option) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
