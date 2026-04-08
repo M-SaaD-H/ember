@@ -31,12 +31,12 @@ fn parse(file: &mut File) -> Result<(
     let mut expirations: HashMap<String, Instant> = HashMap::new();
 
     loop {
-        let opcode = match read_byte(file) {
+        let marker = match read_byte(file) {
             Ok(b) => b,
             Err(_) => break,
         };
 
-        match opcode {
+        match marker {
             0xFE => {
                 let _db = read_length(file)?; // ignore for now
             }
@@ -47,37 +47,71 @@ fn parse(file: &mut File) -> Result<(
                 expirations.insert(key, expiry);
             }
 
-            0x00 => {
-                let data_type = read_string(file)?;
-                
-                match data_type.to_ascii_uppercase().as_str() {
-                    "STRING" => {
-                        let key = read_string(file)?;
-                        let value = read_string(file)?;
-                        db.insert(
-                            key,
-                            RedisObject::String(value),
-                        );
-                    },
-                    "LIST" => {
-                        let length = read_length(file)?;
-                        for _ in 0..length {
-                            let key = read_string(file)?;
-                            let value = read_string(file)?;
-                            db.insert(
-                                key,
-                                RedisObject::String(value),
-                            );
-                        }
-                    }
-                    _ => return Err(anyhow::anyhow!("Unknown data type")),
-                }
-            }
-
             0xFF => break,
 
             _ => {
-                return Err(anyhow::anyhow!("Unknown opcode"));
+                // Writer encodes entries as:
+                // <type-string> then payload.
+                // It also encodes expirations as:
+                // <key-string> 0xFC <u64-ms-le>.
+                let token = read_string_with_first_len(file, marker)?;
+
+                match token.to_ascii_uppercase().as_str() {
+                    "STRING" => {
+                        let value_type = read_byte(file)?;
+                        if value_type != 0x00 {
+                            return Err(anyhow::anyhow!(
+                                "Unexpected value type marker for STRING: {}",
+                                value_type
+                            ));
+                        }
+
+                        let key = read_string(file)?;
+                        let value = read_string(file)?;
+                        db.insert(key, RedisObject::String(value));
+                    }
+                    "LIST" => {
+                        let length = read_length(file)?;
+                        let mut key: Option<String> = None;
+                        let mut values = Vec::with_capacity(length as usize);
+
+                        for _ in 0..length {
+                            let value_type = read_byte(file)?;
+                            if value_type != 0x00 {
+                                return Err(anyhow::anyhow!(
+                                    "Unexpected value type marker for LIST item: {}",
+                                    value_type
+                                ));
+                            }
+
+                            let current_key = read_string(file)?;
+                            let item = read_string(file)?;
+
+                            if key.is_none() {
+                                key = Some(current_key);
+                            }
+
+                            values.push(RedisObject::String(item));
+                        }
+
+                        if let Some(k) = key {
+                            db.insert(k, RedisObject::List(values));
+                        }
+                    }
+                    _ => {
+                        // Not a data-type token, treat it as expiry key.
+                        let expiry_opcode = read_byte(file)?;
+                        if expiry_opcode != 0xFC {
+                            return Err(anyhow::anyhow!(
+                                "Unknown opcode: {}",
+                                marker
+                            ));
+                        }
+
+                        let expiry = read_expiry(file)?;
+                        expirations.insert(token, expiry);
+                    }
+                }
             }
         }
     }
@@ -130,14 +164,32 @@ fn read_string(file: &mut File) -> Result<String> {
     Ok(String::from_utf8_lossy(&buf).to_string())
 }
 
+fn read_string_with_first_len(file: &mut File, first_len_byte: u8) -> Result<String> {
+    let len = read_length_with_first(file, first_len_byte)? as usize;
+
+    let mut buf = vec![0u8; len];
+    file.read_exact(&mut buf)?;
+
+    Ok(String::from_utf8_lossy(&buf).to_string())
+}
+
 fn read_length(file: &mut File) -> Result<u64> {
     let first = read_byte(file)?;
+    read_length_with_first(file, first)
+}
 
+fn read_length_with_first(file: &mut File, first: u8) -> Result<u64> {
     if first < 64 {
-        Ok(first as u64)
-    } else {
+        return Ok(first as u64);
+    }
+
+    if first == 0x80 {
         let mut buf = [0u8; 4];
         file.read_exact(&mut buf)?;
-        Ok(u32::from_be_bytes(buf) as u64)
+        return Ok(u32::from_be_bytes(buf) as u64);
     }
+
+    Err(anyhow::anyhow!(
+        "Unsupported length encoding prefix: 0x{first:02X}"
+    ))
 }
