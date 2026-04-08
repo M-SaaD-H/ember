@@ -21,6 +21,8 @@ pub enum Command {
     MULTI,
     DISCARD,
     EXEC,
+
+    SAVE,
 }
 
 // Extract commands from the user input
@@ -198,6 +200,10 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
         }
         "EXEC" => {
             Ok(Command::EXEC)
+        }
+
+        "SAVE" => {
+            Ok(Command::SAVE)
         }
         
         // this is for redis-cli as it sends the default command as "COMMAND DOCS".

@@ -39,25 +39,24 @@ fn write_db(
     for (key, value) in db {
         match value {
             RedisObject::String(s) => {
-                write_string(writer, "string");
+                write_string(writer, "string")?;
                 write_value(writer, key, s)?;
             }
             RedisObject::List(l) => {
-                write_string(writer, "list");
-                write_length(writer, l.len() as u64);
+                write_string(writer, "list")?;
+                write_length(writer, l.len() as u64)?;
                 for item in l {
                     if let RedisObject::String(s) = item {
                         write_value(writer, key, s)?;
                     }
                 }
             }
-            _ => {}
         }
    
     }
 
     for (key, expire) in expirations {
-        write_expiry(writer, key, *expire);
+        write_expiry(writer, key, *expire)?;
     }
 
     Ok(())
@@ -68,7 +67,7 @@ fn write_expiry(
     key: &str,
     expire_instant: Instant,
 ) -> Result<()> {
-    write_string(writer, key);
+    write_string(writer, key)?;
     
     // Instant - run time only for faster checks
     // SystemTime - for persistence

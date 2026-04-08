@@ -4,6 +4,8 @@ use tokio;
 
 use anyhow::{Error, Result};
 
+use crate::rdb::{reader::load_rdb, writer::save_rdb};
+
 #[derive(Clone)]
 pub enum RedisObject {
     String(String),
@@ -26,11 +28,12 @@ pub struct State {
 }
 
 impl DB {
-    pub fn new() -> DB {
+    pub fn new(rdb_file_path: &str) -> DB {
+        let (data, expirations) = load_rdb(rdb_file_path).unwrap();
         let db = DB {
             state: Arc::new(Mutex::new(State {
-                data: HashMap::new(),
-                expirations: HashMap::new(),
+                data,
+                expirations,
             })),
         };
 
@@ -289,6 +292,21 @@ impl DB {
         if (expired as f64 / sample_size as f64) > 0.25 {
             return Ok(self.active_expiration_cycle().unwrap());
         }
+
+        Ok(())
+    }
+
+    // RDB funcs
+
+    pub fn save_rdb(&mut self, file_path: String) -> Result<(), Error> {
+        let state = match self.state.lock() {
+            Ok(state) => state,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
+            },
+        };
+
+        save_rdb(&file_path, &state.data, &state.expirations)?;
 
         Ok(())
     }

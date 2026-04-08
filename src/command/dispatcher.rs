@@ -119,5 +119,12 @@ fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType, Error>
             client.queued_commands.clear();
             Ok(RespType::Array(replies))
         }
+
+        Command::SAVE => {
+            match client.db.save_rdb(client.rdb_file.clone()) {
+                Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
+                Err(_) => Err(anyhow::anyhow!("Error while saving rdb snapshot.")),
+            }
+        }
     }
 }

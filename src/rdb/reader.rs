@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::{collections::HashMap, fs::File, io::Read};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -5,10 +6,15 @@ use anyhow::Result;
 
 use crate::database::core::RedisObject;
 
-fn load_rdb(file_path: &str) -> Result<(
+pub fn load_rdb(file_path: &str) -> Result<(
     HashMap<String, RedisObject>,
     HashMap<String, Instant>
 )> {
+    // no existing rdb file exists.
+    // return empty data and expirations
+    if !Path::new(file_path).exists() {
+        return Ok((HashMap::new(), HashMap::new()));
+    }
     let mut file = File::open(file_path)?;
 
     Ok(parse(&mut file)?)
