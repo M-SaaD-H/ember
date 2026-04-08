@@ -4,6 +4,7 @@ mod command;
 mod config;
 mod database;
 mod utils;
+mod rdb;
 
 use anyhow::Result;
 
