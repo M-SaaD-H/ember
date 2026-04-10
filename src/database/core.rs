@@ -306,7 +306,13 @@ impl DB {
             },
         };
 
-        save_rdb(&file_path, &state.data, &state.expirations)?;
+        let data = state.data.clone();
+        let expirations = state.expirations.clone();
+        tokio::spawn(async move {
+            if let Err(e) = save_rdb(&file_path, &data, &expirations) {
+                eprintln!("Error while writing rdb. E: {}", e);
+            }
+        });
 
         Ok(())
     }
