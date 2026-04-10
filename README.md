@@ -7,14 +7,19 @@ More Redis features will be added over time.
 ## What works today
 
 - **TCP server** on `127.0.0.1` (default port **6379**, overridable with `--port`).
-- **Concurrent clients** via Tokio tasks; shared state uses an in-memory `HashMap` behind `Arc<Mutex<…>>`.
-- **RESP** parsing and encoding for the commands below.
-- **Commands** (Redis-style names and behavior where implemented):
-  - `PING` → `PONG`
-  - `ECHO <message>` → bulk string reply
-  - `SET key value` and `SET key value EX seconds` / `PX milliseconds` for optional expiry
-  - `EXPIRE key expires_in <NX | XX | GT | LT>` to set expiry on existing keys
-  - `GET key` → bulk string (missing keys are not yet identical to Redis’s null reply)
+- **Concurrent clients** via Tokio tasks.
+- **In-memory store** backed by `Arc<Mutex<...>>` for shared mutable state.
+- **RESP support** for simple strings, bulk strings, arrays, integers, null, and booleans.
+- **Redis-like commands** (implemented subset):
+  - Core: `PING`, `ECHO`, `SET`, `GET`, `DELETE`
+  - Expiration: `SET ... EX|PX`, `EXPIRE key milliseconds [NX|XX|GT|LT]`
+  - Lists: `LPUSH`, `RPUSH`, `LRANGE`
+  - Transactions: `MULTI`, `EXEC`, `DISCARD`
+  - Persistence: `SAVE`
+- **Expiration handling** with both lazy expiration checks and a periodic active expiration cycle.
+- **RDB snapshot persistence**:
+  - Loads snapshot from `snapshots/client-0001.rdb` on startup (if present)
+  - Saves snapshot atomically when `SAVE` is called
 
 You can talk to it with **`redis-cli`** like a real Redis instance for these commands.
 
@@ -51,6 +56,20 @@ redis-cli -p 6379 ECHO hello
 redis-cli -p 6379 SET mykey "hello world"
 redis-cli -p 6379 GET mykey
 redis-cli -p 6379 SET temp value EX 10
+redis-cli -p 6379 EXPIRE temp 5000 NX
+redis-cli -p 6379 DELETE mykey
+
+redis-cli -p 6379 LPUSH mylist a b c
+redis-cli -p 6379 RPUSH mylist d e
+redis-cli -p 6379 LRANGE mylist 0 -1
+
+redis-cli -p 6379 <<'EOF'
+MULTI
+SET txkey one
+GET txkey
+EXEC
+
+redis-cli -p 6379 SAVE
 ```
 
 ## Stack
@@ -62,7 +81,7 @@ redis-cli -p 6379 SET temp value EX 10
 
 ## Roadmap
 
-The goal is to grow this toward more of Redis’s surface area: richer types (lists, hashes, sets), persistence, replication, pub/sub, and stricter protocol compatibility—implemented incrementally while keeping the codebase easy to follow for learning.
+The goal is to keep expanding Redis compatibility: richer data types (hashes, sets, sorted sets, streams), replication, pub/sub, stricter protocol and reply compatibility, and more complete persistence behavior.
 
 ## License
 
