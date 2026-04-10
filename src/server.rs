@@ -61,6 +61,7 @@ impl Server {
             // Spawns a new async task to handle the connection
             // This allows the server to handle multiple connections concurrently
             tokio::spawn(async move {
+                info!("New connection from port: {}", socket.peer_addr().unwrap().port());
                 Server::handle_client(socket).await
             });
         }
@@ -73,13 +74,17 @@ impl Server {
 
         loop {
             buf.clear();
-            if let Err(e) = socket.read_buf(&mut buf).await {
-                error!("Error reading request: {}", e);
+            let socket_read_res = match socket.read_buf(&mut buf).await {
+                Ok(n) => n,
+                Err(e) => {
+                    error!("Error reading request: {}", e);
+                    break;
+                }
+            };
+            
+            // client closed connection
+            if socket_read_res == 0 {
                 break;
-            }
-
-            if buf.is_empty() {
-                continue;
             }
             
             // parse the RESP data from the buffer
