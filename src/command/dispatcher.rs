@@ -1,4 +1,4 @@
-use anyhow::Error;
+use anyhow::Result;
 
 use crate::command::command::Command;
 use crate::config::client::Client;
@@ -6,7 +6,7 @@ use crate::database::core::RedisObject;
 use crate::resp::types::RespType;
 
 // Dispatch the commands
-pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
+pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType> {
     // check for transaction
     if client.in_transaction {
         if matches!(cmd, Command::MULTI) {
@@ -24,7 +24,7 @@ pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
     execute_command(client, cmd)
 }
 
-fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType, Error> {
+fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType> {
     // execute commands
     match cmd {
         Command::PING => {

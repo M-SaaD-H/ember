@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex}, time::Instant};
 use rand::prelude::*;
 use tokio;
 
-use anyhow::{Error, Result};
+use anyhow::{Result};
 
 use crate::rdb::{reader::load_rdb, writer::save_rdb};
 
@@ -52,7 +52,7 @@ impl DB {
         db
     }
 
-    pub fn set(&self, key: String, val: RedisObject, expires_at: Option<Instant>) -> Result<(), Error> {
+    pub fn set(&self, key: String, val: RedisObject, expires_at: Option<Instant>) -> Result<()> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -73,7 +73,7 @@ impl DB {
         Ok(())
     }
 
-    pub fn get(&self, key: String) -> Result<RedisObject, Error> {
+    pub fn get(&self, key: String) -> Result<RedisObject> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -94,7 +94,7 @@ impl DB {
         }
     }
 
-    pub fn delete(&self, key: String) -> Result<(), Error> {
+    pub fn delete(&self, key: String) -> Result<()> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -108,7 +108,7 @@ impl DB {
         Ok(())
     }
     
-    pub fn lpush(&self, key: String, values: Vec<RedisObject>) -> Result<(), Error> {
+    pub fn lpush(&self, key: String, values: Vec<RedisObject>) -> Result<()> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -138,7 +138,7 @@ impl DB {
         Ok(())
     }
 
-    pub fn rpush(&self, key: String, values: Vec<RedisObject>) -> Result<(), Error> {
+    pub fn rpush(&self, key: String, values: Vec<RedisObject>) -> Result<()> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -164,7 +164,7 @@ impl DB {
         Ok(())
     }
     
-    pub fn lrange(&self, key: String, mut start: i32, mut stop: i32) -> Result<RedisObject, Error> {
+    pub fn lrange(&self, key: String, mut start: i32, mut stop: i32) -> Result<RedisObject> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -202,7 +202,7 @@ impl DB {
         }
     }
 
-    pub fn expire(&self, key: String, expires_at: Instant, option: Option<String>) -> Result<(), Error> {
+    pub fn expire(&self, key: String, expires_at: Instant, option: Option<String>) -> Result<()> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -248,7 +248,7 @@ impl DB {
 
     // Expirations funcs
 
-    fn is_expired(&self, state: &State, key: &String) -> Result<bool, Error> {
+    fn is_expired(&self, state: &State, key: &String) -> Result<bool> {
         if let Some(expires_at) = state.expirations.get(key) {
             return Ok(expires_at < &Instant::now());
         }
@@ -256,7 +256,7 @@ impl DB {
         Ok(false)
     }
 
-    fn active_expiration_cycle(&self) -> Result<(), Error> {
+    fn active_expiration_cycle(&self) -> Result<()> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {
@@ -298,7 +298,7 @@ impl DB {
 
     // RDB funcs
 
-    pub fn save_rdb(&mut self, file_path: String) -> Result<(), Error> {
+    pub fn save_rdb(&mut self, file_path: String) -> Result<()> {
         let state = match self.state.lock() {
             Ok(state) => state,
             Err(e) => {

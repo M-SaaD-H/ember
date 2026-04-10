@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use anyhow::{Error, Result};
+use anyhow::{Result};
 
 use crate::resp::types::RespType;
 use crate::utils::parse_int;
@@ -26,7 +26,7 @@ pub enum Command {
 }
 
 // Extract commands from the user input
-pub fn extract_command(resp: &RespType) -> Result<Command, Error> {
+pub fn extract_command(resp: &RespType) -> Result<Command> {
     match resp {
         RespType::Array(arr) => {
             if arr.is_empty() {
@@ -48,7 +48,7 @@ pub fn extract_command(resp: &RespType) -> Result<Command, Error> {
 }
 
 // Create the command enum for the respective input commands
-fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command, Error> {
+fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command> {
     match cmd {
         "PING" => Ok(Command::PING),
         "ECHO" => {

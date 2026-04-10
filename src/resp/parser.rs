@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::Result;
 use bytes::BytesMut;
 
 use crate::resp::types::RespType;
@@ -181,7 +181,7 @@ impl Parser {
     }
 
     // Parse usize from bytes
-    fn parse_usize_from_buf(buf: &[u8]) -> Result<usize, Error> {
+    fn parse_usize_from_buf(buf: &[u8]) -> Result<usize> {
         let utf8_str = String::from_utf8(buf.to_vec());
         let parsed_int = match utf8_str {
             Ok(s) => {
