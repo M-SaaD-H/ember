@@ -48,6 +48,10 @@ impl Parser {
             return Err(ParseError::Incomplete);
         }
 
+        if Self::is_inline(buf) {
+            return Self::parse_inline(buf);
+        }
+
         match buf[0] as char {
             '+' => Self::parse_simple(buf),
             '-' => Self::parse_simple(buf),
@@ -195,5 +199,30 @@ impl Parser {
             .map_err(|_| ParseError::Invalid("Invalid UTF-8 string.".into()))?;
         utf8_str.parse()
             .map_err(|_| ParseError::Invalid("Invalid value for an integer.".into()))
+    }
+
+    // Inline parser. It's legacy but still used.
+    // have to add this to support redis-benchmark
+    fn parse_inline(buf: &BytesMut) -> Result<(RespType, usize), ParseError> {
+        if let Some((data, len)) = Self::read_until_crlf(buf) {
+            let line = String::from_utf8(data.to_vec())
+                .map_err(|_| ParseError::Invalid("Invalid inline command".into()))?;
+    
+            let parts: Vec<RespType> = line
+                .split_whitespace()
+                .map(|s| RespType::BulkString(s.to_string()))
+                .collect();
+    
+            return Ok((RespType::Array(parts), len));
+        }
+    
+        Err(ParseError::Incomplete)
+    }
+
+    fn is_inline(buf: &BytesMut) -> bool {
+        match buf[0] as char {
+            '+' | '-' | ':' | '$' | '*' | '_' | '#' => false,
+            _ => true,
+        }
     }
 }
