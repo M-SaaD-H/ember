@@ -87,7 +87,7 @@ impl Parser {
 
             return match utf8_str {
                 Ok(str) => {
-                    let int: i32 = str.parse()
+                    let int: i64 = str.parse()
                         .map_err(|_| ParseError::Invalid("Invalid integer value.".into()))?;
                     Ok((RespType::Integer(int), len + 1))
                 },
@@ -109,27 +109,23 @@ impl Parser {
                 return Err(ParseError::Incomplete);
             };
 
-        // check if the buffer contains complete string based on the length parsed
-        let bulk_str_end_idx = bytes_consumed + bulk_str_len;
-        // need at least bulk_str_end_idx + 2 bytes for the trailing \r\n
-        if bulk_str_end_idx + 2 > buf.len() {
+        let data_start = bytes_consumed;
+        let data_end = data_start + bulk_str_len;
+        
+        if data_end + 2 > buf.len() {
             return Err(ParseError::Incomplete);
         }
-
-        if let Some((data, bytes_consumed)) = Self::read_until_crlf(&buf[bytes_consumed..]) {
-            if bytes_consumed != bulk_str_len + 2 { // +2 for "\r\n"
-                return Err(ParseError::Invalid("Invalid value for bulk string.".into()));
-            }
-            let utf8_str = String::from_utf8(data.to_vec());
-            return match utf8_str {
-                Ok(str) => {
-                    Ok((RespType::BulkString(str), bulk_str_end_idx + 2))
-                },
-                Err(_) => Err(ParseError::Invalid("Invalid value for bulk string.".into())),
-            };
+        
+        let data = &buf[data_start..data_end];
+        
+        if &buf[data_end..data_end + 2] != b"\r\n" {
+            return Err(ParseError::Invalid("Missing CRLF after bulk string".into()));
         }
-
-        Err(ParseError::Incomplete)
+        
+        let s = String::from_utf8(data.to_vec())
+            .map_err(|_| ParseError::Invalid("Invalid UTF-8".into()))?;
+        
+        Ok((RespType::BulkString(s), data_end + 2))
     }
 
     // "*<number-of-elements>\r\n<element-1>...<element-n>""
@@ -184,7 +180,7 @@ impl Parser {
 
     // Reads the block of data (till CRLF ("\r\n"))
     fn read_until_crlf(buf: &[u8]) -> Option<(&[u8], usize)> {
-        for i in 0..(buf.len() -1) {
+        for i in 0..buf.len().saturating_sub(1) {
             if buf[i] == b'\r' && buf[i + 1] == b'\n' {
                 return Some((&buf[0..i], i + 2));
             }

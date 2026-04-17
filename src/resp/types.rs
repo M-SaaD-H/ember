@@ -10,7 +10,7 @@ use bytes::Bytes;
 pub enum RespType {
     SimpleString(String),
     SimpleError(String),
-    Integer(i32),
+    Integer(i64),
     BulkString(String),
     Array(Vec<RespType>),
     Null,
