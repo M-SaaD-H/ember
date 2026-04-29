@@ -89,7 +89,7 @@ fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType> {
                         }).collect()
                     ))
                 },
-                Ok(_) => Err(anyhow::anyhow!("Unexpected Error: expected list")),
+                Ok(RedisObject::String(s)) => Ok(RespType::BulkString(s)),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }

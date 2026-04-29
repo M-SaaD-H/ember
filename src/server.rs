@@ -133,11 +133,11 @@ impl Server {
                 let res = match dispatch(&mut client, cmd) {
                     Ok(res_str) => res_str,
                     Err(e) => {
-                        if let Err(e) = socket.write_all((e.to_string() + "\r\n").as_bytes()).await {
+                        if let Err(e) = socket.write_all(&RespType::SimpleError(e.to_string()).to_bytes()).await {
                             error!("{}", e);
                             panic!("Error writing response to the client.");
                         }
-                        return;
+                        continue;
                     }
                 };
 
