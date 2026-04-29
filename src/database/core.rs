@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}, time::Instant};
+use std::{collections::HashMap, sync::{Arc, Mutex, MutexGuard}, time::Instant};
 use rand::prelude::*;
 use tokio;
 
@@ -53,12 +53,7 @@ impl DB {
     }
 
     pub fn set(&self, key: String, val: RedisObject, expires_at: Option<Instant>) -> Result<()> {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
-            },
-        };
+        let mut state = self.get_state().unwrap();
 
         // if the key is replacing with a new value remove it's its expirations too.
         if state.expirations.contains_key(&key) {
@@ -74,12 +69,7 @@ impl DB {
     }
 
     pub fn get(&self, key: String) -> Result<RedisObject> {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
-            },
-        };
+        let mut state = self.get_state().unwrap();
 
         match state.data.get(&key) {
             Some(ro) => {
@@ -95,12 +85,7 @@ impl DB {
     }
 
     pub fn delete(&self, key: String) -> Result<()> {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
-            },
-        };
+        let mut state = self.get_state().unwrap();
 
         state.data.remove(&key);
         state.expirations.remove(&key);
@@ -109,12 +94,7 @@ impl DB {
     }
     
     pub fn lpush(&self, key: String, values: Vec<RedisObject>) -> Result<()> {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
-            },
-        };
+        let mut state = self.get_state().unwrap();
         
         if !state.data.contains_key(&key) {
             state.data.insert(key.clone(), RedisObject::List(values));
@@ -139,12 +119,7 @@ impl DB {
     }
 
     pub fn rpush(&self, key: String, values: Vec<RedisObject>) -> Result<()> {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
-            },
-        };
+        let mut state = self.get_state().unwrap();
         
         if !state.data.contains_key(&key) {
             state.data.insert(key.clone(), RedisObject::List(values));
@@ -165,12 +140,7 @@ impl DB {
     }
     
     pub fn lrange(&self, key: String, mut start: i32, mut stop: i32) -> Result<RedisObject> {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
-            },
-        };
+        let mut state = self.get_state().unwrap();
         
         match state.data.get(&key) {
             Some(ro) => {
@@ -203,12 +173,7 @@ impl DB {
     }
 
     pub fn expire(&self, key: String, expires_at: Instant, option: Option<String>) -> Result<()> {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
-            },
-        };
+        let mut state = self.get_state().unwrap();
 
         if !state.data.contains_key(&key) {
             return Err(anyhow::anyhow!("Entry not found."));
@@ -257,12 +222,7 @@ impl DB {
     }
 
     fn active_expiration_cycle(&self) -> Result<()> {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
-            },
-        };
+        let mut state = self.get_state().unwrap();
 
         let sample_size = 20;
         let mut expired = 0;
@@ -299,12 +259,7 @@ impl DB {
     // RDB funcs
 
     pub fn save_rdb(&mut self, file_path: String) -> Result<()> {
-        let state = match self.state.lock() {
-            Ok(state) => state,
-            Err(e) => {
-                return Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e))
-            },
-        };
+        let state = self.get_state().unwrap();
 
         let data = state.data.clone();
         let expirations = state.expirations.clone();
@@ -315,5 +270,13 @@ impl DB {
         });
 
         Ok(())
+    }
+
+    // get the state
+    fn get_state<'a>(&'a self) -> Result<MutexGuard<'a, State>> {
+        match self.state.lock() {
+            Ok(state) => Ok(state),
+            Err(e) => Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e)),
+        }
     }
 }
