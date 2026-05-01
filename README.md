@@ -1,92 +1,175 @@
 # Ember
 
-A small **Redis-compatible** in-memory server written in **Rust**. I built it to learn how Redis works under the hood and to get more comfortable with async Rust (Tokio), the RESP wire protocol, and structuring a network service.
+Ember is a Redis-inspired in-memory key-value store built in Rust to explore systems programming, concurrency, networking, and high-performance backend design.
 
-More Redis features will be added over time.
+The project focuses on understanding how modern in-memory systems handle concurrent workloads, protocol parsing, persistence, expiration, and efficient request processing.
 
-## What works today
+---
 
-- **TCP server** on `127.0.0.1` (default port **6379**, overridable with `--port`).
-- **Concurrent clients** via Tokio tasks.
-- **In-memory store** backed by `Arc<Mutex<...>>` for shared mutable state.
-- **RESP support** for simple strings, bulk strings, arrays, integers, null, and booleans.
-- **Redis-like commands** (implemented subset):
-  - Core: `PING`, `ECHO`, `SET`, `GET`, `DELETE`
-  - Expiration: `SET ... EX|PX`, `EXPIRE key milliseconds [NX|XX|GT|LT]`
-  - Lists: `LPUSH`, `RPUSH`, `LRANGE`
-  - Transactions: `MULTI`, `EXEC`, `DISCARD`
-  - Persistence: `SAVE`
-- **Expiration handling** with both lazy expiration checks and a periodic active expiration cycle.
-- **RDB snapshot persistence**:
-  - Loads snapshot from `snapshots/client-0001.rdb` on startup (if present)
-  - Saves snapshot atomically when `SAVE` is called
+## Features
 
-You can talk to it with **`redis-cli`** like a real Redis instance for these commands.
+- Concurrent request handling
+- Asynchronous runtime using Tokio
+- TCP server implementation
+- Thread-safe shared in-memory datastore
+- Redis Serialization Protocol (RESP) support
+- Key expiration support
+- Eviction policies
+- Persistence support
+- Transaction support using commands like `MULTI`, `EXEC`, and `DISCARD`
+- Redis-compatible benchmarking using `redis-benchmark`
+- Lightweight and modular architecture
 
-## Requirements
+---
 
-- A recent **Rust** toolchain (`rustup` recommended) that supports the edition declared in `Cargo.toml`.
+## Supported Commands
 
-## Build and run
+| Command                                | Description                              |
+|----------------------------------------|------------------------------------------|
+| `PING`                                 | Health check                             |
+| `ECHO message`                         | Echo back the provided message           |
+| `SET key value [EX seconds\|PX ms]`    | Store a value (optionally with expiry)   |
+| `GET key`                              | Retrieve a value                         |
+| `DELETE key`                           | Delete a key                             |
+| `LPUSH key value [value ...]`          | Push one or more values to list head     |
+| `RPUSH key value [value ...]`          | Push one or more values to list tail     |
+| `LRANGE key start stop`                | Read a range of list elements            |
+| `EXPIRE key duration [NX\|XX\|GT\|LT]` | Set expiration with optional condition   |
+| `EXISTS key`                           | Check key existence                      |
+| `TTL key`                              | Get remaining TTL                        |
+| `MULTI`                                | Start a transaction block                |
+| `EXEC`                                 | Execute all commands in a block          |
+| `DISCARD`                              | Discard transaction commands             |
+| `SAVE`                                 | Persist in-memory state to disk          |
 
-```bash
+---
+
+## Transactions
+
+Ember supports transactional execution, enabling clients to group multiple commands in a transaction block. Using `MULTI`, clients begin a transaction and queue commands for atomic execution, which can then be finalized with `EXEC` or canceled with `DISCARD`. Transactions help ensure predictable batch operation semantics, similar to Redis. This functionality was implemented to explore transactional concepts and command queuing within the server.
+
+Programmatic workflow:
+```
+MULTI
+OK
+
+SET key1 value1
+QUEUED
+
+SET key2 value2
+QUEUED
+
+EXEC
+1) OK
+2) OK
+```
+If you run `DISCARD` instead of `EXEC`, all queued commands are abandoned.
+
+---
+
+## Architecture
+
+Ember follows an asynchronous event-driven architecture.
+
+```text
+             Client
+               ↓
+           TCP Listener
+               ↓
+      Async Connection Handler
+               ↓
+           RESP Parser
+               ↓
+     Command Execution Layer
+               ↓
+     Command Dispatcher Layer
+               ↓
+     Shared In-Memory Store
+```
+
+## Concurrency Model
+
+Ember uses asynchronous request handling powered by Tokio to support multiple concurrent client connections efficiently.
+
+Key areas explored during development:
+
+- Concurrent socket handling
+- Shared state synchronization
+- Request parsing performance
+- Expiration handling
+- Async task scheduling
+
+
+## Persistence
+
+Ember includes persistence support to retain data across server restarts.
+
+The persistence layer was implemented to explore:
+
+- Disk-backed state storage
+- Serialization strategies
+- Recovery workflows
+- Tradeoffs between durability and performance
+
+
+## Expiration and Eviction
+
+The datastore supports key expiration with TTL-based invalidation.
+
+Eviction mechanisms were added to explore:
+
+- Memory management strategies
+- Automatic cleanup
+- Expired key handling under concurrent workloads
+
+
+## Running the Project
+
+### Clone the Repository
+```
+git clone https://github.com/M-SaaD-H/ember.git
+cd ember
+```
+
+### Build
+```
 cargo build --release
+```
+
+### Run
+```
 cargo run --release
 ```
 
-Custom port:
-
-```bash
-cargo run --release -- --port 1234
+The server runs on:
+```
+127.0.0.1:6379
 ```
 
-Optional: enable logs (uses `env_logger`), e.g.:
+## Project Goals
 
-```bash
-RUST_LOG=info cargo run --release
-```
+This project was built to gain hands-on experience with:
 
-## Try it
+- Systems programming in Rust
+- Concurrent backend system design
+- Async runtimes and networking
+- Database internals
+- Performance-oriented engineering
+- Persistence and memory management
 
-With another terminal and `redis-cli` installed:
 
-```bash
-redis-cli -p 6379 PING
-redis-cli -p 6379 ECHO hello
-redis-cli -p 6379 SET mykey "hello world"
-redis-cli -p 6379 GET mykey
-redis-cli -p 6379 SET temp value EX 10
-redis-cli -p 6379 EXPIRE temp 5000 NX
-redis-cli -p 6379 DELETE mykey
+## Future Improvements
 
-redis-cli -p 6379 LPUSH mylist a b c
-redis-cli -p 6379 RPUSH mylist d e
-redis-cli -p 6379 LRANGE mylist 0 -1
+Planned areas of exploration include:
 
-redis-cli -p 6379 <<'EOF'
-MULTI
-SET txkey one
-GET txkey
-EXEC
-
-redis-cli -p 6379 SAVE
-```
-
-## Stack
-
-- **Tokio** — async runtime, TCP, I/O
-- **bytes** — buffering
-- **anyhow** — error handling
-- **log** / **env_logger** — logging
-
-## Roadmap
-
-The goal is to keep expanding Redis compatibility: richer data types (hashes, sets, sorted sets, streams), replication, pub/sub, stricter protocol and reply compatibility, and more complete persistence behavior.
+- Pub/Sub support
+- Replication
+- Clustered architecture
+- Advanced eviction strategies
+- Improved profiling and observability
+- Optimized persistence mechanisms
+- Enhanced transactional guarantees
 
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
----
-
-*Educational project; not a production Redis replacement.*
