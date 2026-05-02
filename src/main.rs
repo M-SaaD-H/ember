@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
     let port = parse_args();
 
     // await the 'new()' cz initializing the server takes time
-    let mut server = Server::new(port).await;
+    let mut server = Server::new(&port).await?;
     server.run().await?;
     // the server will keep running untill the program is terminated
 

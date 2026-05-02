@@ -1,6 +1,6 @@
 use anyhow::{Error, Result};
 use bytes::{Buf, BytesMut};
-use log::{error, info};
+use log::{error, info, warn};
 use tokio::{
     // AsyncWriteExt trait provides asynchronous write methods like write_all
     io::{AsyncWriteExt, AsyncReadExt},
@@ -23,45 +23,42 @@ pub struct Server {
 }
 
 impl Server {
-    // Create a new server instance on the given port
-    pub async fn new(port: String) -> Self {
-        let addr = format!("127.0.0.1:{}", port);
-        let listener = match TcpListener::bind(addr).await {
-            Ok(listener) => {
-                info!("TCP listener started on port: {}", port);
-                listener
-            },
-            Err(e) => {
-                error!("{}", e);
-                panic!("Error initializing the server.");
-            }
-        };
+    // Creates a new server instance bound to the given port.
 
-        Self {
-            listener
-        }
+    // Returns an error if the TCP listener cannot be created (e.g. the port
+    // is already in use or the process lacks the required privileges).
+    pub async fn new(port: &str) -> Result<Self> {
+        let addr = format!("127.0.0.1:{}", port);
+        let listener = TcpListener::bind(&addr).await.map_err(|e| {
+            error!("Failed to bind to {}: {}", addr, e);
+            Error::from(e)
+        })?;
+
+        info!("TCP listener started on port: {}", port);
+        Ok(Self { listener })
     }
 
-    // Runs the server in an infinite loop continiously handling
+    // Runs the server in an infinite loop, continuously handling
     // incoming connections
-    pub async fn run(&mut self) -> Result<()> {        
+    pub async fn run(&mut self) -> Result<()> {
         loop {
-            // accpet the incoming connections
             let socket = match self.accept_connection().await {
                 Ok(stream) => stream,
                 Err(e) => {
-                    // Log the error and panic the thread
-                    // this will crash the server if there is an error
-                    // connecting to the client
-                    error!("{}", e);
-                    panic!("Error accpeting connection.");
+                    // A transient accept failure should not take down the whole
+                    // server.  Log it and keep accepting.
+                    error!("Error accepting connection: {}", e);
+                    continue;
                 }
             };
 
             // Spawns a new async task to handle the connection
             // This allows the server to handle multiple connections concurrently
             tokio::spawn(async move {
-                info!("New connection from port: {}", socket.peer_addr().unwrap().port());
+                match socket.peer_addr() {
+                    Ok(addr) => info!("New connection from: {}", addr),
+                    Err(e) => warn!("New connection (peer address unavailable: {})", e),
+                }
                 Server::handle_client(socket).await
             });
         }
@@ -78,12 +75,12 @@ impl Server {
             let bytes_read = match socket.read_buf(&mut buf).await {
                 Ok(n) => n,
                 Err(e) => {
-                    error!("Error reading request: {}", e);
+                    error!("Error reading from socket: {}", e);
                     break;
                 }
             };
 
-            // Client closed connection
+            // Client closed the connection.
             if bytes_read == 0 {
                 break;
             }
@@ -107,7 +104,7 @@ impl Server {
                     Err(ParseError::Invalid(msg)) => {
                         error!("Invalid RESP data: {}", msg);
                         if let Err(e) = socket.write_all(&RespType::SimpleError(msg).to_bytes()).await {
-                            error!("Error writing to the client. E: {}", e);
+                            error!("Error writing error response to client: {}", e);
                         }
                         // Clear the buffer to avoid getting stuck on malformed data
                         buf.clear();
@@ -122,44 +119,38 @@ impl Server {
                 let cmd = match extract_command(&resp) {
                     Ok(cmd) => cmd,
                     Err(e) => {
-                        error!("E: {}", e);
+                        error!("Failed to extract command: {}", e);
                         if let Err(e) = socket.write_all(&RespType::SimpleError(e.to_string()).to_bytes()).await {
-                            error!("Error writing to the client. E: {}", e);
+                            error!("Error writing error response to client: {}", e);
                         }
                         continue;
                     }
                 };
 
                 let res = match dispatch(&mut client, cmd) {
-                    Ok(res_str) => res_str,
+                    Ok(res) => res,
                     Err(e) => {
                         if let Err(e) = socket.write_all(&RespType::SimpleError(e.to_string()).to_bytes()).await {
-                            error!("{}", e);
-                            panic!("Error writing response to the client.");
+                            error!("Error writing error response to client: {}", e);
                         }
                         continue;
                     }
                 };
 
                 if let Err(e) = socket.write_all(&res.to_bytes()).await {
-                    error!("{}", e);
-                    panic!("Error writing response to the client.");
+                    error!("Error writing response to client: {}", e);
+                    // The connection is broken; stop processing commands for this client.
+                    return;
                 }
             }
         }
     }
 
-    // Accepts the incoming the TCP connection and returns the
-    // corrosponding tokio TcpStream
+    // Accepts an incoming TCP connection and returns the corresponding stream
     async fn accept_connection(&mut self) -> Result<TcpStream> {
-        // loop is used to retry connection untill it is success
-        loop {
-            // '.accept()' returns a tuple (TcpStream, SocketAddr)
-            // but we only need the stream
-            match self.listener.accept().await {
-                Ok((stream, _)) => return Ok(stream),
-                Err(e) => return Err(Error::from(e)),
-            }
-        }
+        // `.accept()` returns a tuple (TcpStream, SocketAddr);
+        // we only need the stream
+        let (stream, _) = self.listener.accept().await.map_err(Error::from)?;
+        Ok(stream)
     }
 }
