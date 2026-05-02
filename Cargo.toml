@@ -18,3 +18,8 @@ log = "0.4.29"
 env_logger = "0.11.9"
 bytes = "1.11.1"
 rand = "0.10.0"
+
+[dev-dependencies]
+# test-util unlocks tokio::time::pause() / advance() for deterministic time-based tests,
+# following the same pattern used by tokio-rs/mini-redis.
+tokio = { version = "1", features = ["test-util", "macros", "rt"] }

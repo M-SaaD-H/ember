@@ -6,7 +6,7 @@ use anyhow::{Result};
 
 use crate::rdb::{reader::load_rdb, writer::save_rdb};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RedisObject {
     String(String),
     List(Vec<RedisObject>),
@@ -28,6 +28,20 @@ pub struct State {
 }
 
 impl DB {
+    /// Creates a fresh in-memory [`DB`] without loading from disk or spawning
+    /// the background expiration task.
+    ///
+    /// **Intended for use in tests only.** Do not call in production code.
+    #[allow(dead_code)]
+    pub fn new_in_memory() -> DB {
+        DB {
+            state: Arc::new(Mutex::new(State {
+                data: HashMap::new(),
+                expirations: HashMap::new(),
+            })),
+        }
+    }
+
     pub fn new(rdb_file_path: &str) -> DB {
         let (data, expirations) = load_rdb(rdb_file_path).unwrap();
         let db = DB {
