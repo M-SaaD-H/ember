@@ -10,8 +10,8 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new() -> Client {
-        let rdb_file_path = String::from("snapshots/client-0001.rdb");
+    pub fn new(client_id: u16) -> Client {
+        let rdb_file_path = String::from(format!("snapshots/client-{}.rdb", client_id));
         Client {
             db: DB::new(&rdb_file_path),
             in_transaction: false,

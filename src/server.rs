@@ -56,18 +56,20 @@ impl Server {
             // This allows the server to handle multiple connections concurrently
             tokio::spawn(async move {
                 match socket.peer_addr() {
-                    Ok(addr) => info!("New connection from: {}", addr),
+                    Ok(addr) => {
+                        info!("New connection from: {}", addr);
+                        Server::handle_client(socket, addr.port()).await
+                    },
                     Err(e) => warn!("New connection (peer address unavailable: {})", e),
                 }
-                Server::handle_client(socket).await
             });
         }
     }
     
-    async fn handle_client(mut socket: TcpStream) {
+    async fn handle_client(mut socket: TcpStream, client_id: u16) {
         // read the TCP message and store the raw bytes in the buffer
         let mut buf = BytesMut::with_capacity(512);
-        let mut client = Client::new();
+        let mut client = Client::new(client_id);
 
         loop {
             // Read data from the socket into the buffer.
