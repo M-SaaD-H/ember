@@ -26,17 +26,7 @@ impl RespType {
         match self {
             RespType::SimpleString(ss) => format!("+{}\r\n", ss),
             RespType::Integer(int) => format!(":{}\r\n", int),
-            RespType::BulkString(bs) => {
-                // '.chars().count()' is used instead of '.len()' because
-                // - '.chars().count()' returns the count of the characters in a string.
-                // - '.len()' returns the no. of bytes in the string
-                // rust strings are UTF-8 encoded.
-                // normal strings contains only simple ASCII chars the results for both will be same
-                // but if the string contains some emoji or any other character from lang other than
-                // english than the no. of bytes and no. of characters will not be the same.
-                // Hence to avoid this issue '.chars().count()' is used instead of the conventional '.len()'
-                format!("${}\r\n{}\r\n", bs.chars().count(), bs)
-            },
+            RespType::BulkString(bs) => format!("${}\r\n{}\r\n", bs.len(), bs),
             RespType::Array(arr) => {
                 let mut arr_str = format!("*{}\r\n", arr.len());
 

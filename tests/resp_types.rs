@@ -52,13 +52,17 @@ fn bulk_string_serialization() {
 }
 
 #[test]
-fn bulk_string_uses_char_count_not_byte_count() {
-    // "café" is 4 chars but 5 UTF-8 bytes. The RESP spec counts characters.
+fn bulk_string_length_is_byte_count_not_char_count() {
+    // "café" is 4 chars but 5 UTF-8 bytes.
+    // The RESP spec (https://redis.io/docs/reference/protocol-spec/) states
+    // that the length prefix is the 'byte' count of the following data.
+    // Using char count would produce a malformed frame: the receiver would
+    // read only 4 bytes ("caf") and then interpret 'é' as the trailing CRLF.
     let s = "café";
     let serialized = RespType::BulkString(s.into()).to_string();
     assert!(
-        serialized.starts_with("$4\r\n"),
-        "expected char count 4, got: {serialized:?}"
+        serialized.starts_with("$5\r\n"),
+        "expected byte count 5, got: {serialized:?}"
     );
 }
 
