@@ -8,18 +8,21 @@ use tokio::{
 };
 
 use crate::config::client::Client;
+use crate::database::core::DB;
 use crate::command::{
     dispatcher::dispatch,
-    command::extract_command, 
+    command::extract_command,
 };
 use crate::resp::{
     parser::{Parser, ParseError},
-    types::RespType
+    types::RespType,
 };
 
 #[derive(Debug)]
 pub struct Server {
     listener: TcpListener,
+    // One DB for the whole process.
+    db: DB,
 }
 
 impl Server {
@@ -34,8 +37,11 @@ impl Server {
             Error::from(e)
         })?;
 
+        // Load (or create) the single shared database once at startup.
+        let db = DB::new();
+
         info!("TCP listener started on port: {}", port);
-        Ok(Self { listener })
+        Ok(Self { listener, db })
     }
 
     // Runs the server in an infinite loop, continuously handling
@@ -52,30 +58,39 @@ impl Server {
                 }
             };
 
-            // Spawns a new async task to handle the connection
-            // This allows the server to handle multiple connections concurrently
+            let mut db = self.db.clone();
+
+            // Spawns a new async task to handle the connection concurrently.
             tokio::spawn(async move {
                 match socket.peer_addr() {
                     Ok(addr) => {
                         info!("New connection from: {}", addr);
-                        Server::handle_client(socket, addr.port()).await
-                    },
+                        Server::handle_client(socket, &mut db).await;
+                    }
                     Err(e) => warn!("New connection (peer address unavailable: {})", e),
                 }
             });
         }
     }
-    
-    async fn handle_client(mut socket: TcpStream, client_id: u16) {
-        // read the TCP message and store the raw bytes in the buffer
+
+    async fn handle_client(socket: TcpStream, db: &mut DB) {
+        // Split the socket so we can hand the write half to BufWriter
+        // independently of the read half.
+        let (mut reader, writer) = socket.into_split();
+
+        // BufWriter coalesces multiple small write_all() calls into fewer
+        // syscalls. For pipelined clients this is a significant win — a burst
+        // of 10 commands produces one send() instead of ten.
+        let mut writer = BufWriter::with_capacity(8 * 1024, writer);
+
         let mut buf = BytesMut::with_capacity(512);
-        let mut client = Client::new(client_id);
+        let mut client = Client::new();
 
         loop {
             // Read data from the socket into the buffer.
             // This appends to any leftover bytes from a previous incomplete parse.
-            let bytes_read = match socket.read_buf(&mut buf).await {
-                Ok(n) => n,
+            let bytes_read = match reader.read_buf(&mut buf).await {
+                Ok(n)  => n,
                 Err(e) => {
                     error!("Error reading from socket: {}", e);
                     break;
@@ -105,7 +120,10 @@ impl Server {
                     }
                     Err(ParseError::Invalid(msg)) => {
                         error!("Invalid RESP data: {}", msg);
-                        if let Err(e) = socket.write_all(&RespType::SimpleError(msg).to_bytes()).await {
+                        if let Err(e) = writer
+                            .write_all(&RespType::SimpleError(msg).to_bytes())
+                            .await
+                        {
                             error!("Error writing error response to client: {}", e);
                         }
                         // Clear the buffer to avoid getting stuck on malformed data
@@ -122,36 +140,48 @@ impl Server {
                     Ok(cmd) => cmd,
                     Err(e) => {
                         error!("Failed to extract command: {}", e);
-                        if let Err(e) = socket.write_all(&RespType::SimpleError(e.to_string()).to_bytes()).await {
+                        if let Err(e) = writer
+                            .write_all(&RespType::SimpleError(e.to_string()).to_bytes())
+                            .await
+                        {
                             error!("Error writing error response to client: {}", e);
                         }
                         continue;
                     }
                 };
 
-                let res = match dispatch(&mut client, cmd) {
-                    Ok(res) => res,
+                let res = match dispatch(&mut client, db, cmd) {
+                    Ok(res)  => res,
                     Err(e) => {
-                        if let Err(e) = socket.write_all(&RespType::SimpleError(e.to_string()).to_bytes()).await {
+                        if let Err(e) = writer
+                            .write_all(&RespType::SimpleError(e.to_string()).to_bytes())
+                            .await
+                        {
                             error!("Error writing error response to client: {}", e);
                         }
                         continue;
                     }
                 };
 
-                if let Err(e) = socket.write_all(&res.to_bytes()).await {
+                if let Err(e) = writer.write_all(&res.to_bytes()).await {
                     error!("Error writing response to client: {}", e);
                     // The connection is broken; stop processing commands for this client.
                     return;
                 }
+            }
+
+            // All pipelined commands in this read batch are processed. Flush
+            // now so the client receives its responses promptly. BufWriter
+            // may have coalesced several responses into a single syscall.
+            if let Err(e) = writer.flush().await {
+                error!("Error flushing write buffer: {}", e);
+                return;
             }
         }
     }
 
     // Accepts an incoming TCP connection and returns the corresponding stream
     async fn accept_connection(&mut self) -> Result<TcpStream> {
-        // `.accept()` returns a tuple (TcpStream, SocketAddr);
-        // we only need the stream
         let (stream, _) = self.listener.accept().await.map_err(Error::from)?;
         Ok(stream)
     }

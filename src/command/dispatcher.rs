@@ -2,11 +2,11 @@ use anyhow::Result;
 
 use crate::command::command::Command;
 use crate::config::client::Client;
-use crate::database::core::RedisObject;
+use crate::database::core::{DB, RedisObject};
 use crate::resp::types::RespType;
 
 // Dispatch the commands
-pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType> {
+pub fn dispatch(client: &mut Client, db: &mut DB, cmd: Command) -> Result<RespType> {
     // check for transaction
     if client.in_transaction {
         if matches!(cmd, Command::MULTI) {
@@ -14,17 +14,17 @@ pub fn dispatch(client: &mut Client, cmd: Command) -> Result<RespType> {
         }
 
         if matches!(cmd, Command::EXEC | Command::DISCARD) {
-            return execute_command(client, cmd);
+            return execute_command(client, db, cmd);
         }
 
         client.queued_commands.push(cmd);
         return Ok(RespType::SimpleString(String::from("QUEUED")));
     }
 
-    execute_command(client, cmd)
+    execute_command(client, db, cmd)
 }
 
-fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType> {
+fn execute_command(client: &mut Client, db: &mut DB, cmd: Command) -> Result<RespType> {
     // execute commands
     match cmd {
         Command::PING => {
@@ -38,46 +38,46 @@ fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType> {
             if let Some(exp) = expires_in {
                 println!("exp: {:?}", exp);
             }
-            match client.db.set(key, val, expires_in) {
+            match db.set(key, val, expires_in) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
         Command::GET(key) => {
-            match client.db.get(key) {
+            match db.get(key) {
                 Ok(RedisObject::String(s)) => Ok(RespType::BulkString(s)),
                 Ok(RedisObject::List(_)) => Err(anyhow::anyhow!("Wrong data type. Expected String, got List.")),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
         Command::DELETE(key) => {
-            match client.db.delete(key) {
+            match db.delete(key) {
                 Ok(()) => Ok(RespType::BulkString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
         Command::EXPIRE(key, expires_at, option) => {
-            match client.db.expire(key, expires_at, option) {
+            match db.expire(key, expires_at, option) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
         Command::LPUSH(key, vals) => {
             let values = vals.iter().map(|v| RedisObject::String(v.clone())).collect();
-            match client.db.lpush(key, values) {
+            match db.lpush(key, values) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
         Command::RPUSH(key, vals) => {
             let values = vals.iter().map(|v| RedisObject::String(v.clone())).collect();
-            match client.db.rpush(key, values) {
+            match db.rpush(key, values) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
         Command::LRANGE(key, start, stop ) => {
-            match client.db.lrange(key, start, stop) {
+            match db.lrange(key, start, stop) {
                 Ok(RedisObject::List(list)) => {
                     Ok(RespType::Array(
                         list.iter().filter_map(|item| {
@@ -110,7 +110,7 @@ fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType> {
             let mut replies: Vec<RespType> = Vec::new();
             let queued_cmds = client.queued_commands.clone();
             for c in queued_cmds {
-                match execute_command(client, c) {
+                match execute_command(client, db, c) {
                     Ok(rep) => replies.push(rep),
                     Err(e) => return Err(anyhow::anyhow!("Failed to execute queued commands. E: {}", e)),
                 }
@@ -121,7 +121,7 @@ fn execute_command(client: &mut Client, cmd: Command) -> Result<RespType> {
         }
 
         Command::SAVE => {
-            match client.db.save_rdb(client.rdb_file.clone()) {
+            match db.save_rdb() {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(_) => Err(anyhow::anyhow!("Error while saving rdb snapshot.")),
             }
