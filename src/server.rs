@@ -2,8 +2,7 @@ use anyhow::{Error, Result};
 use bytes::{Buf, BytesMut};
 use log::{error, info, warn};
 use tokio::{
-    // AsyncWriteExt trait provides asynchronous write methods like write_all
-    io::{AsyncWriteExt, AsyncReadExt},
+    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
     net::{TcpListener, TcpStream},
 };
 
@@ -27,7 +26,7 @@ pub struct Server {
 
 impl Server {
     // Creates a new server instance bound to the given port.
-
+    //
     // Returns an error if the TCP listener cannot be created (e.g. the port
     // is already in use or the process lacks the required privileges).
     pub async fn new(port: &str) -> Result<Self> {
@@ -52,7 +51,7 @@ impl Server {
                 Ok(stream) => stream,
                 Err(e) => {
                     // A transient accept failure should not take down the whole
-                    // server.  Log it and keep accepting.
+                    // server. Log it and keep accepting.
                     error!("Error accepting connection: {}", e);
                     continue;
                 }
