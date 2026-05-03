@@ -57,14 +57,14 @@ impl Server {
                 }
             };
 
-            let mut db = self.db.clone();
+            let db = self.db.clone();
 
             // Spawns a new async task to handle the connection concurrently.
             tokio::spawn(async move {
                 match socket.peer_addr() {
                     Ok(addr) => {
                         info!("New connection from: {}", addr);
-                        Server::handle_client(socket, &mut db).await;
+                        Server::handle_client(socket, &db).await;
                     }
                     Err(e) => warn!("New connection (peer address unavailable: {})", e),
                 }
@@ -72,7 +72,7 @@ impl Server {
         }
     }
 
-    async fn handle_client(socket: TcpStream, db: &mut DB) {
+    async fn handle_client(socket: TcpStream, db: &DB) {
         // Split the socket so we can hand the write half to BufWriter
         // independently of the read half.
         let (mut reader, writer) = socket.into_split();
