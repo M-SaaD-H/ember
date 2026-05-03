@@ -1,10 +1,12 @@
-use std::{collections::HashMap, sync::{Arc, Mutex, MutexGuard}, time::Instant};
+use std::{sync::Arc, time::Instant};
+use dashmap::DashMap;
 use rand::prelude::*;
-use tokio;
 
-use anyhow::{Result};
+use anyhow::Result;
 
 use crate::rdb::{reader::load_rdb, writer::save_rdb};
+
+pub const RDB_FILE: &str = "snapshots/dump.rdb";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RedisObject {
@@ -14,17 +16,24 @@ pub enum RedisObject {
     // SortedSet,
 }
 
-#[derive(Clone)]
-pub struct DB {
-    state: Arc<Mutex<State>>,
-}
-// Arc -> shared ownership
-// Mutex -> thread safe mutation
-//          (ensures only one thread mutates the state at a time)
+// DB is a cheaply-cloneable handle to the shared server state.
+// Internally it holds two Arc<DashMap<...>> — one for data, one for
+// expiration timestamps.
+//
+// DashMap shards the key-space across 64 independent RwLocks, so
+// concurrent reads/writes to different keys never contend at all.
+// This replaces the previous Arc<Mutex<State>> which serialised every
+// GET, SET, DELETE etc. behind a single lock.
+// 
+// DashMap = high-performance, concurrent HashMap
+// It handles internal locking automatically
+// It uses sharding. Instead of a single for the entire map, it splits
+// the data into multiple shards each with it's own
 
-pub struct State {
-    data: HashMap<String, RedisObject>,
-    expirations: HashMap<String, Instant>,
+#[derive(Clone, Debug)]
+pub struct DB {
+    data: Arc<DashMap<String, RedisObject>>,
+    expirations: Arc<DashMap<String, Instant>>,
 }
 
 impl DB {
@@ -35,136 +44,126 @@ impl DB {
     #[allow(dead_code)]
     pub fn new_in_memory() -> DB {
         DB {
-            state: Arc::new(Mutex::new(State {
-                data: HashMap::new(),
-                expirations: HashMap::new(),
-            })),
+            data: Arc::new(DashMap::new()),
+            expirations: Arc::new(DashMap::new()),
         }
     }
 
-    pub fn new(rdb_file_path: &str) -> DB {
-        let (data, expirations) = load_rdb(rdb_file_path).unwrap();
+    pub fn new() -> DB {
+        let (data_map, exp_map) = load_rdb(RDB_FILE).unwrap();
+
         let db = DB {
-            state: Arc::new(Mutex::new(State {
-                data,
-                expirations,
-            })),
+            data: Arc::new(DashMap::from_iter(data_map)),
+            expirations: Arc::new(DashMap::from_iter(exp_map)),
         };
 
+        // Spawn the active-expiration background task. It holds the DashMap
+        // shard locks only for the nanoseconds it takes to remove a single
+        // entry - it never holds any lock across a sleep.
         let db_clone = db.clone();
         tokio::spawn(async move {
-            loop {
-                if let Err(e) = db_clone.active_expiration_cycle() {
-                    eprintln!("Error running active expiration: {:?}", e);
-                }
-    
-                // running active expiration cycle every 3 sec.
-                tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
-            }
+            db_clone.active_expiration_task().await;
         });
 
         db
     }
 
     pub fn set(&self, key: String, val: RedisObject, expires_at: Option<Instant>) -> Result<()> {
-        let mut state = self.get_state().unwrap();
+        // Removing the old expiration (if any) before inserting the new value
+        // keeps the two maps in sync regardless of whether an expiry is set.
+        self.expirations.remove(&key);
 
-        // if the key is replacing with a new value remove it's its expirations too.
-        if state.expirations.contains_key(&key) {
-            state.expirations.remove(&key);
+        self.data.insert(key.clone(), val);
+
+        match expires_at {
+            Some(exp) => { self.expirations.insert(key, exp); }
+            None => { /* no expiration, nothing to do */ }
         }
 
-        state.data.insert(key.clone(), val);
-        match expires_at {
-            Some(exp) => state.expirations.insert(key.clone(), exp),
-            None => state.expirations.remove(&key),
-        };
         Ok(())
     }
 
     pub fn get(&self, key: String) -> Result<RedisObject> {
-        let mut state = self.get_state().unwrap();
+        // Lazy expiration: check the expiration map before returning the value.
+        // The DashMap shard lock for 'key' is held only for the duration of
+        // the .get() call (a few nanoseconds), not for our entire function.
+        if let Some(exp) = self.expirations.get(&key) {
+            if self.is_expired(&key) {
+                // Key has expired, drop the read reference before mutating
+                drop(exp);
 
-        match state.data.get(&key) {
-            Some(ro) => {
-                if self.is_expired(&state, &key).unwrap() {
-                    state.data.remove(&key);
-                    return Ok(RedisObject::String("nil".to_string()));
-                };
+                self.data.remove(&key);
+                self.expirations.remove(&key);
+                return Ok(RedisObject::String("nil".to_string()));
+            }
+        }
 
-                Ok(ro.clone())
-            },
-            None => Ok(RedisObject::String("nil".to_string())),
+        match self.data.get(&key) {
+            Some(ro) => Ok(ro.clone()),
+            None     => Ok(RedisObject::String("nil".to_string())),
         }
     }
 
     pub fn delete(&self, key: String) -> Result<()> {
-        let mut state = self.get_state().unwrap();
-
-        state.data.remove(&key);
-        state.expirations.remove(&key);
-
+        self.data.remove(&key);
+        self.expirations.remove(&key);
         Ok(())
     }
-    
+
     pub fn lpush(&self, key: String, values: Vec<RedisObject>) -> Result<()> {
-        let mut state = self.get_state().unwrap();
-        
-        if !state.data.contains_key(&key) {
-            state.data.insert(key.clone(), RedisObject::List(values));
-        } else {
-            match state.data.get(&key) {
-                Some(RedisObject::List(list)) => {
-                    let mut l = list.clone();
-                    for val in values {
-                        l.insert(0, val);
-                    }
-                    state.data.insert(key.clone(), RedisObject::List(l));
+        match self.data.get_mut(&key) {
+            None => {
+                self.data.insert(key, RedisObject::List(values));
+            }
+            Some(mut entry) => match entry.value_mut() {
+                RedisObject::List(list) => {
+                    // LPUSH inserts at the head, so prepend in order.
+                    let mut new_head = values;
+                    new_head.extend(list.drain(..));
+                    *list = new_head;
                 }
-                Some(RedisObject::String(_)) => return Err(anyhow::anyhow!("Wrong data type. Expected List, got String.")),
-                None => {
-                    return Err(anyhow::anyhow!("Entry not found."));
+                RedisObject::String(_) => {
+                    return Err(anyhow::anyhow!("Wrong data type. Expected List, got String."));
                 }
-            };
-            
+            },
         }
-        
         Ok(())
     }
 
     pub fn rpush(&self, key: String, values: Vec<RedisObject>) -> Result<()> {
-        let mut state = self.get_state().unwrap();
-        
-        if !state.data.contains_key(&key) {
-            state.data.insert(key.clone(), RedisObject::List(values));
-        } else {
-            match state.data.get_mut(&key) {
-                Some(RedisObject::List(list)) => {
+        match self.data.get_mut(&key) {
+            None => {
+                self.data.insert(key, RedisObject::List(values));
+            }
+            Some(mut entry) => match entry.value_mut() {
+                RedisObject::List(list) => {
                     list.extend(values);
                 }
-                Some(RedisObject::String(_)) => return Err(anyhow::anyhow!("Wrong data type. Expected List, got String.")),
-                None => {
-                    return Err(anyhow::anyhow!("Entry not found."));
+                RedisObject::String(_) => {
+                    return Err(anyhow::anyhow!("Wrong data type. Expected List, got String."));
                 }
-            };
-            
+            },
         }
-        
         Ok(())
     }
-    
+
     pub fn lrange(&self, key: String, mut start: i32, mut stop: i32) -> Result<RedisObject> {
-        let mut state = self.get_state().unwrap();
-        
-        match state.data.get(&key) {
+        // Lazy expiration check.
+        if let Some(exp) = self.expirations.get(&key) {
+            if self.is_expired(&key) {
+                drop(exp);
+
+                self.data.remove(&key);
+                self.expirations.remove(&key);
+                return Ok(RedisObject::String("nil".to_string()));
+            }
+        }
+
+        match self.data.get(&key) {
+            None => Ok(RedisObject::String("nil".to_string())),
             Some(ro) => {
-                if self.is_expired(&state, &key).unwrap() {
-                    state.data.remove(&key);
-                    return Ok(RedisObject::String("nil".to_string()));
-                };
-    
-                if let RedisObject::List(list) = ro {
-                    // negetive start and stop represents the index from end
+                if let RedisObject::List(list) = ro.value() {
+                    // Negative indices count from the end.
                     if start < 0 {
                         start += list.len() as i32;
                     }
@@ -172,125 +171,144 @@ impl DB {
                         stop += list.len() as i32;
                     }
 
-                    let vals: Vec<RedisObject> = list.iter()
+                    let vals: Vec<RedisObject> = list
+                        .iter()
                         .enumerate()
                         .filter(|(idx, _)| *idx >= start as usize && *idx <= stop as usize)
                         .map(|(_, v)| v.clone())
                         .collect();
-                    return Ok(RedisObject::List(vals));
+
+                    Ok(RedisObject::List(vals))
                 } else {
                     Err(anyhow::anyhow!("Wrong type. Expected list."))
                 }
-            },
-            None => Ok(RedisObject::String("nil".to_string())),
+            }
         }
     }
 
     pub fn expire(&self, key: String, expires_at: Instant, option: Option<String>) -> Result<()> {
-        let mut state = self.get_state().unwrap();
-
-        if !state.data.contains_key(&key) {
+        if !self.data.contains_key(&key) {
             return Err(anyhow::anyhow!("Entry not found."));
-        };
+        }
 
-        let update_expiry= match option {
+        let update_expiry = match option {
             Some(opt) => match opt.as_str() {
-                "NX" => {
-                    !state.expirations.contains_key(&key)
-                },
-                "XX" => {
-                    state.expirations.contains_key(&key)
-                },
-                "GT" => {
-                    match state.expirations.get(&key) {
-                        Some(existing_expiry) => expires_at > *existing_expiry,
-                        None => false,
-                    }
-                },
-                "LT" => {
-                    match state.expirations.get(&key) {
-                        Some(existing_expiry) => expires_at < *existing_expiry,
-                        None => false,
-                    }
-                },
+                "NX" => !self.expirations.contains_key(&key),
+                "XX" => self.expirations.contains_key(&key),
+                "GT" => self.expirations
+                            .get(&key)
+                            .map_or(false, |e| expires_at > *e),
+                "LT" => self.expirations
+                            .get(&key)
+                            .map_or(false, |e| expires_at < *e),
                 _ => return Err(anyhow::anyhow!("Invalid option for expire command.")),
             },
             None => true,
         };
 
         if update_expiry {
-            state.expirations.insert(key, expires_at);
+            self.expirations.insert(key, expires_at);
         }
 
         Ok(())
     }
 
-    // Expirations funcs
+    // Expiration
 
-    fn is_expired(&self, state: &State, key: &String) -> Result<bool> {
-        if let Some(expires_at) = state.expirations.get(key) {
-            return Ok(expires_at < &Instant::now());
+    fn is_expired(&self, key: &String) -> bool {
+        if let Some(expires_at) = self.expirations.get(key) {
+            return *expires_at < Instant::now();
         }
 
-        Ok(false)
+        false
     }
 
-    fn active_expiration_cycle(&self) -> Result<()> {
-        let mut state = self.get_state().unwrap();
-
-        let sample_size = 20;
-        let mut expired = 0;
-
-        // getting keys in every active expiration cycle is a good design choice
-        // will be improving it later.
-        let keys: Vec<String> = state.expirations.keys().cloned().collect();
-
-        if keys.is_empty() {
-            return Ok(());
+    // Runs forever as a background task, waking every 100 ms to purge expired
+    // keys. Each cycle is a short burst of work; the task yields to the Tokio
+    // scheduler between cycles so it never starves I/O tasks.
+    async fn active_expiration_task(&self) {
+        loop {
+            self.active_expiration_cycle();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
+    }
 
+    // Samples up to 20 keys from the expiration map and removes any that have
+    // expired. If more than 25 % of the sample was expired, the cycle runs
+    // again immediately (Redis's algorithm).
+    //
+    // Crucially, each DashMap operation holds a shard lock for nanoseconds
+    // only, there is no monolithic lock held across the whole function, so
+    // live GET/SET traffic is never blocked by this background task.
+    fn active_expiration_cycle(&self) {
+        let sample_size = 20usize;
+        let now = Instant::now();
         let mut rng = rand::rng();
 
-        for _ in 0..sample_size {
-            let n = rng.random::<u32>() as usize;
-            let idx = n % keys.len();
-            let k = &keys[idx];
+        // Collect up to `sample_size` random keys from the expirations map.
+        // We materialise them into a Vec so we release the iterator (and its
+        // shard locks) before calling remove().
+        let sampled: Vec<String> = {
+            let total = self.expirations.len();
+            if total == 0 {
+                return;
+            }
+            let skip = rng.random::<u64>() as usize % total;
+            self.expirations
+                .iter()
+                .skip(skip)
+                .take(sample_size)
+                .map(|e| e.key().clone())
+                .collect()
+        };
 
-            if self.is_expired(&state, k).unwrap() {
-                state.data.remove(k);
-                state.expirations.remove(k);
-                expired += 1;
+        let mut expired = 0usize;
+        for key in &sampled {
+            if let Some(exp) = self.expirations.get(key) {
+                if *exp < now {
+                    // Drops the reference to the expiration value before mutating the DashMap.
+                    drop(exp);
+            
+                    self.data.remove(key);
+                    self.expirations.remove(key);
+                    expired += 1;
+                }
             }
         }
 
-        if (expired as f64 / sample_size as f64) > 0.25 {
-            return Ok(self.active_expiration_cycle().unwrap());
+        // Redis re-runs the cycle immediately when the expired ratio is high,
+        // so we keep purging without waiting for the next 100 ms tick.
+        let checked = sampled.len().max(1);
+        if (expired as f64 / checked as f64) > 0.25 {
+            self.active_expiration_cycle();
         }
-
-        Ok(())
     }
 
-    // RDB funcs
+    // RDB
 
-    pub fn save_rdb(&mut self, file_path: String) -> Result<()> {
-        let state = self.get_state().unwrap();
+    // Use child processes to optimize snapshot writes further 
+    pub fn save_rdb(&self) -> Result<()> {
+        // Take a point-in-time snapshot of both maps. The clones are Arc
+        // clones under the hood (O(n) for the entries, but lock-free per
+        // shard). We do this quickly and then hand the snapshot off to a
+        // background task so we never block the I/O event loop.
+        let data_snapshot: std::collections::HashMap<String, RedisObject> =
+            self.data
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect();
+        let exp_snapshot: std::collections::HashMap<String, Instant> =
+            self.expirations
+                .iter()
+                .map(|e| (e.key().clone(), *e.value()))
+                .collect();
 
-        let data = state.data.clone();
-        let expirations = state.expirations.clone();
         tokio::spawn(async move {
-            if let Err(e) = save_rdb(&file_path, &data, &expirations) {
+            if let Err(e) = save_rdb(RDB_FILE, &data_snapshot, &exp_snapshot) {
                 eprintln!("Error while writing rdb. E: {}", e);
             }
         });
 
         Ok(())
-    }
-
-    // get the state
-    fn get_state<'a>(&'a self) -> Result<MutexGuard<'a, State>> {
-        match self.state.lock() {
-            Ok(state) => Ok(state),
-            Err(e) => Err(anyhow::anyhow!("Failed to acquire DB lock. E: {}", e)),
-        }
     }
 }

@@ -208,6 +208,8 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command> {
         
         // this is for redis-cli as it sends the default command as "COMMAND DOCS".
         "COMMAND" => Ok(Command::PING),
-        _ => Err(anyhow::anyhow!("Unknown command.")),
+
+        // _ => Err(anyhow::anyhow!("Unknown command: {}", cmd)),
+        _ => Ok(Command::PING),
     }
 }
