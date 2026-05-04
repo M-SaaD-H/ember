@@ -139,6 +139,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "env_logger",
+ "itoa",
  "log",
  "num_cpus",
  "rand",

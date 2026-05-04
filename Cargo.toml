@@ -20,6 +20,7 @@ bytes = "1.11.1"
 rand = "0.10.0"
 num_cpus = "1"
 socket2 = { version = "0.5", features = ["all"] }
+itoa = "1"
 
 dashmap = "6"
 

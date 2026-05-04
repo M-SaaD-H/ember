@@ -44,14 +44,14 @@ fn execute_command(client: &mut Client, db: &DB, cmd: Command) -> Result<RespTyp
             }
         }
         Command::GET(key) => {
-            match db.get(key) {
+            match db.get(&key) {
                 Ok(RedisObject::String(s)) => Ok(RespType::BulkString(s)),
                 Ok(RedisObject::List(_)) => Err(anyhow::anyhow!("Wrong data type. Expected String, got List.")),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
         }
         Command::DELETE(key) => {
-            match db.delete(key) {
+            match db.delete(&key) {
                 Ok(()) => Ok(RespType::BulkString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
             }
@@ -77,7 +77,7 @@ fn execute_command(client: &mut Client, db: &DB, cmd: Command) -> Result<RespTyp
             }
         }
         Command::LRANGE(key, start, stop ) => {
-            match db.lrange(key, start, stop) {
+            match db.lrange(&key, start, stop) {
                 Ok(RedisObject::List(list)) => {
                     Ok(RespType::Array(
                         list.iter().filter_map(|item| {

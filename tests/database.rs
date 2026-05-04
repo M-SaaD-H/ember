@@ -41,14 +41,14 @@ fn set_overwrites_previous_value() {
 fn delete_removes_key() {
     let t = TestDb::new();
     t.set("key", "value");
-    t.db.delete("key".into()).unwrap();
+    t.db.delete("key").unwrap();
     assert_eq!(t.get_string("key"), "nil");
 }
 
 #[test]
 fn delete_nonexistent_key_is_ok() {
     let t = TestDb::new();
-    assert!(t.db.delete("ghost".into()).is_ok());
+    assert!(t.db.delete("ghost").is_ok());
 }
 
 // Lazy expiry (get returns nil for expired keys)
@@ -89,7 +89,7 @@ fn lpush_creates_list_on_new_key() {
     let vals = vec![RedisObject::String("a".into())];
     t.db.lpush("list".into(), vals).unwrap();
 
-    if let RedisObject::List(items) = t.db.lrange("list".into(), 0, -1).unwrap() {
+    if let RedisObject::List(items) = t.db.lrange("list", 0, -1).unwrap() {
         assert_eq!(items.len(), 1);
     } else {
         panic!("expected List");
@@ -102,7 +102,7 @@ fn lpush_prepends_to_existing_list() {
     t.db.lpush("list".into(), vec![RedisObject::String("b".into())]).unwrap();
     t.db.lpush("list".into(), vec![RedisObject::String("a".into())]).unwrap();
 
-    if let RedisObject::List(items) = t.db.lrange("list".into(), 0, -1).unwrap() {
+    if let RedisObject::List(items) = t.db.lrange("list", 0, -1).unwrap() {
         // LPUSH prepends: "a" should be at index 0
         assert_eq!(items[0], RedisObject::String("a".into()));
         assert_eq!(items[1], RedisObject::String("b".into()));
@@ -119,7 +119,7 @@ fn rpush_appends_to_list() {
     t.db.rpush("list".into(), vec![RedisObject::String("x".into())]).unwrap();
     t.db.rpush("list".into(), vec![RedisObject::String("y".into())]).unwrap();
 
-    if let RedisObject::List(items) = t.db.lrange("list".into(), 0, -1).unwrap() {
+    if let RedisObject::List(items) = t.db.lrange("list", 0, -1).unwrap() {
         assert_eq!(items[0], RedisObject::String("x".into()));
         assert_eq!(items[1], RedisObject::String("y".into()));
     } else {
@@ -136,7 +136,7 @@ fn lrange_subset() {
         t.db.rpush("list".into(), vec![RedisObject::String(v.into())]).unwrap();
     }
 
-    if let RedisObject::List(items) = t.db.lrange("list".into(), 1, 2).unwrap() {
+    if let RedisObject::List(items) = t.db.lrange("list", 1, 2).unwrap() {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0], RedisObject::String("b".into()));
         assert_eq!(items[1], RedisObject::String("c".into()));
@@ -152,7 +152,7 @@ fn lrange_negative_index() {
         t.db.rpush("list".into(), vec![RedisObject::String(v.into())]).unwrap();
     }
 
-    if let RedisObject::List(items) = t.db.lrange("list".into(), -1, -1).unwrap() {
+    if let RedisObject::List(items) = t.db.lrange("list", -1, -1).unwrap() {
         assert_eq!(items[0], RedisObject::String("c".into()));
     } else {
         panic!("expected List");

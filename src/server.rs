@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
 use bytes::{Buf, BytesMut};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufWriter},
@@ -154,7 +154,7 @@ async fn accept_loop(worker_id: usize, listener: TcpListener, db: DB) {
             Ok((socket, peer_addr)) => {
                 let db = db.clone();
                 tokio::spawn(async move {
-                    info!("[w{}] connection from {}", worker_id, peer_addr);
+                    debug!("[w{}] connection from {}", worker_id, peer_addr);
                     handle_client(socket, &db).await;
                 });
             }
@@ -240,9 +240,7 @@ async fn handle_client(socket: TcpStream, db: &DB) {
 
                 Err(ParseError::Invalid(msg)) => {
                     error!("invalid RESP: {}", msg);
-                    let _ = writer
-                        .write_all(&RespType::SimpleError(msg).to_bytes())
-                        .await;
+                    let _ = RespType::SimpleError(msg).write_to(&mut writer).await;
                     // Discard the buffer; we cannot know where the next
                     // valid command starts in a corrupted stream.
                     buf.clear();
@@ -257,9 +255,7 @@ async fn handle_client(socket: TcpStream, db: &DB) {
                 Ok(cmd) => cmd,
                 Err(e) => {
                     error!("extract_command: {}", e);
-                    let _ = writer
-                        .write_all(&RespType::SimpleError(e.to_string()).to_bytes())
-                        .await;
+                    let _ = RespType::SimpleError(e.to_string()).write_to(&mut writer).await;
                     continue;
                 }
             };
@@ -267,14 +263,12 @@ async fn handle_client(socket: TcpStream, db: &DB) {
             let res = match dispatch(&mut client, db, cmd) {
                 Ok(res) => res,
                 Err(e) => {
-                    let _ = writer
-                        .write_all(&RespType::SimpleError(e.to_string()).to_bytes())
-                        .await;
+                    let _ = RespType::SimpleError(e.to_string()).write_to(&mut writer).await;
                     continue;
                 }
             };
 
-            if let Err(e) = writer.write_all(&res.to_bytes()).await {
+            if let Err(e) = res.write_to(&mut writer).await {
                 error!("write error: {}", e);
                 // The connection is broken; stop processing for this client.
                 return;

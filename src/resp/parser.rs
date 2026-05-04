@@ -68,11 +68,9 @@ impl Parser {
     // e.g. "+OK\r\n" -> "OK"
     fn parse_simple(buf: &[u8]) -> Result<(RespType, usize), ParseError> {
         if let Some((data, len)) = Self::read_until_crlf(&buf[1..]) {
-            let utf8_str = String::from_utf8(data.to_vec());
-            return match utf8_str {
-                Ok(simple_str) => Ok((RespType::SimpleString(simple_str), len + 1)),
-                Err(_) => Err(ParseError::Invalid("Simple string value is not a valid utf8 string.".into())),
-            };
+            let s = std::str::from_utf8(data)
+                .map_err(|_| ParseError::Invalid("Simple string value is not a valid utf8 string.".into()))?;
+            return Ok((RespType::SimpleString(s.to_owned()), len + 1));
         }
         Err(ParseError::Incomplete)
     }
@@ -82,15 +80,11 @@ impl Parser {
     // e.g. ":123\r\n" -> 123
     fn parse_integer(buf: &[u8]) -> Result<(RespType, usize), ParseError> {
         if let Some((data, len)) = Self::read_until_crlf(&buf[1..]) {
-            let utf8_str = String::from_utf8(data.to_vec());
-            return match utf8_str {
-                Ok(str) => {
-                    let int: i64 = str.parse()
-                        .map_err(|_| ParseError::Invalid("Invalid integer value.".into()))?;
-                    Ok((RespType::Integer(int), len + 1))
-                }
-                Err(_) => Err(ParseError::Invalid("Integer value is not valid.".into())),
-            };
+            let s = std::str::from_utf8(data)
+                .map_err(|_| ParseError::Invalid("Integer value is not valid.".into()))?;
+            let int: i64 = s.parse()
+                .map_err(|_| ParseError::Invalid("Invalid integer value.".into()))?;
+            return Ok((RespType::Integer(int), len + 1));
         }
         Err(ParseError::Incomplete)
     }
@@ -119,10 +113,11 @@ impl Parser {
             return Err(ParseError::Invalid("Missing CRLF after bulk string".into()));
         }
 
-        let s = String::from_utf8(data.to_vec())
+        // Validate UTF-8 on the slice, then allocate only once.
+        let s = std::str::from_utf8(data)
             .map_err(|_| ParseError::Invalid("Invalid UTF-8".into()))?;
 
-        Ok((RespType::BulkString(s), data_end + 2))
+        Ok((RespType::BulkString(s.to_owned()), data_end + 2))
     }
 
     // "*<number-of-elements>\r\n<element-1>...<element-n>"
@@ -156,17 +151,18 @@ impl Parser {
 
     fn parse_bool(buf: &[u8]) -> Result<(RespType, usize), ParseError> {
         if let Some((data, len)) = Self::read_until_crlf(&buf[1..]) {
-            let utf8_str = String::from_utf8(data.to_vec());
-            return match utf8_str {
-                Ok(str) => match str.as_str() {
-                    "t" => Ok((RespType::Boolean(true),  len + 1)),
-                    "f" => Ok((RespType::Boolean(false), len + 1)),
-                    _   => Err(ParseError::Invalid(
-                        "Invalid value for boolean. Only \"t\" or \"f\" is accepted.".into(),
-                    )),
-                },
-                Err(_) => Err(ParseError::Invalid("Invalid value for boolean.".into())),
-            };
+            // Boolean payloads are always single ASCII bytes ("t" or "f"),
+            // so we can check the raw byte directly instead of allocating.
+            if data.len() == 1 {
+                match data[0] {
+                    b't' => return Ok((RespType::Boolean(true), len + 1)),
+                    b'f' => return Ok((RespType::Boolean(false), len + 1)),
+                    _ => {}
+                }
+            }
+            return Err(ParseError::Invalid(
+                "Invalid value for boolean. Only \"t\" or \"f\" is accepted.".into(),
+            ));
         }
         Err(ParseError::Incomplete)
     }
@@ -181,11 +177,11 @@ impl Parser {
         None
     }
 
-    // Parse usize from bytes
+    // Parse usize directly from a byte slice
     fn parse_usize_from_buf(buf: &[u8]) -> Result<usize, ParseError> {
-        let utf8_str = String::from_utf8(buf.to_vec())
+        let s = std::str::from_utf8(buf)
             .map_err(|_| ParseError::Invalid("Invalid UTF-8 string.".into()))?;
-        utf8_str.parse()
+        s.parse()
             .map_err(|_| ParseError::Invalid("Invalid value for an integer.".into()))
     }
 
@@ -193,12 +189,12 @@ impl Parser {
     // have to add this to support redis-benchmark
     fn parse_inline(buf: &[u8]) -> Result<(RespType, usize), ParseError> {
         if let Some((data, len)) = Self::read_until_crlf(buf) {
-            let line = String::from_utf8(data.to_vec())
+            let line = std::str::from_utf8(data)
                 .map_err(|_| ParseError::Invalid("Invalid inline command".into()))?;
 
             let parts: Vec<RespType> = line
                 .split_whitespace()
-                .map(|s| RespType::BulkString(s.to_string()))
+                .map(|s| RespType::BulkString(s.to_owned()))
                 .collect();
 
             return Ok((RespType::Array(parts), len));

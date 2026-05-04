@@ -83,30 +83,30 @@ impl DB {
         Ok(())
     }
 
-    pub fn get(&self, key: String) -> Result<RedisObject> {
+    pub fn get(&self, key: &str) -> Result<RedisObject> {
         // Lazy expiration: check the expiration map before returning the value.
         // The DashMap shard lock for 'key' is held only for the duration of
         // the .get() call (a few nanoseconds), not for our entire function.
-        if let Some(exp) = self.expirations.get(&key) {
-            if self.is_expired(&key) {
+        if let Some(exp) = self.expirations.get(key) {
+            if self.is_expired(key) {
                 // Key has expired, drop the read reference before mutating
                 drop(exp);
 
-                self.data.remove(&key);
-                self.expirations.remove(&key);
+                self.data.remove(key);
+                self.expirations.remove(key);
                 return Ok(RedisObject::String("nil".to_string()));
             }
         }
 
-        match self.data.get(&key) {
+        match self.data.get(key) {
             Some(ro) => Ok(ro.clone()),
             None     => Ok(RedisObject::String("nil".to_string())),
         }
     }
 
-    pub fn delete(&self, key: String) -> Result<()> {
-        self.data.remove(&key);
-        self.expirations.remove(&key);
+    pub fn delete(&self, key: &str) -> Result<()> {
+        self.data.remove(key);
+        self.expirations.remove(key);
         Ok(())
     }
 
@@ -147,19 +147,19 @@ impl DB {
         Ok(())
     }
 
-    pub fn lrange(&self, key: String, mut start: i32, mut stop: i32) -> Result<RedisObject> {
+    pub fn lrange(&self, key: &str, mut start: i32, mut stop: i32) -> Result<RedisObject> {
         // Lazy expiration check.
-        if let Some(exp) = self.expirations.get(&key) {
-            if self.is_expired(&key) {
+        if let Some(exp) = self.expirations.get(key) {
+            if self.is_expired(key) {
                 drop(exp);
 
-                self.data.remove(&key);
-                self.expirations.remove(&key);
+                self.data.remove(key);
+                self.expirations.remove(key);
                 return Ok(RedisObject::String("nil".to_string()));
             }
         }
 
-        match self.data.get(&key) {
+        match self.data.get(key) {
             None => Ok(RedisObject::String("nil".to_string())),
             Some(ro) => {
                 if let RedisObject::List(list) = ro.value() {
@@ -215,7 +215,7 @@ impl DB {
 
     // Expiration
 
-    fn is_expired(&self, key: &String) -> bool {
+    fn is_expired(&self, key: &str) -> bool {
         if let Some(expires_at) = self.expirations.get(key) {
             return *expires_at < Instant::now();
         }

@@ -108,7 +108,7 @@ impl TestDb {
 
     // Get the string value for `key`. Returns `"nil"` for missing/expired keys.
     pub fn get_string(&self, key: &str) -> String {
-        match self.db.get(key.to_string()).unwrap_or_else(|e| panic!("get({key:?}) failed: {e}")) {
+        match self.db.get(key).unwrap_or_else(|e| panic!("get({key:?}) failed: {e}")) {
             RedisObject::String(s) => s,
             other => panic!("expected RedisObject::String for {key:?}, got {other:?}"),
         }
