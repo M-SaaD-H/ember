@@ -22,17 +22,32 @@ use crate::resp::{
 
 // Tuning knobs
 
-// Write-side kernel socket buffer (bytes). Raising this reduces send syscalls
-// for large responses but consumes kernel memory per connection.
-const WRITE_BUF_BYTES: usize = 8 * 1024; // 8 KiB
+// Write-side kernel socket buffer (bytes). 64 KiB fits a full pipeline batch of
+// ~3,000 small GET replies without a mid-batch flush, cutting flush syscalls by ~8x
+// compared to the old 8 KiB default.
+const WRITE_BUF_BYTES: usize = 64 * 1024; // 64 KiB
 
-// Initial capacity of the per-connection read buffer (bytes). The buffer grows
-// automatically if a single command is larger than this.
-const READ_BUF_BYTES: usize = 512; // 512 bytes
+// Initial capacity of the per-connection read buffer (bytes). 16 KiB avoids the
+// repeated grow-and-reallocate churn that 4 KiB causes when clients send moderately
+// large values or pipelined batches that exceed the initial allocation.
+const READ_BUF_BYTES: usize = 16 * 1024; // 16 KiB
+
+// Hint to the kernel for the per-socket send buffer. Linux doubles the value
+// internally (the extra half is for bookkeeping), so 256 KiB yields ~512 KiB
+// effective. This lets a single flush() push far more data before back-pressure
+// forces the task to yield and be rescheduled.
+const SO_SNDBUF_BYTES: usize = 256 * 1024; // 256 KiB hint -> ~512 KiB effective
 
 // Keep-alive idle time before the first probe (seconds). Catches dead peers
 // that vanish without sending a FIN/RST.
 const TCP_KEEPALIVE_IDLE_SECS: u64 = 60;
+
+// Maximum number of commands processed in one pipeline drain pass before the
+// inner loop flushes and yields. Without this cap a single client that sends
+// 500k commands in one TCP segment monopolises the Tokio worker thread
+// indefinitely — it never hits an .await so the scheduler never preempts it.
+// Flushing mid-batch also delivers partial results to the client sooner.
+const MAX_PIPELINE_DEPTH: usize = 1_000;
 
 // `Server` is a thin wrapper that holds everything needed to start listening.
 // Call [`Server::run`] to block and serve connections forever.
@@ -178,10 +193,14 @@ async fn accept_loop(worker_id: usize, listener: TcpListener, db: DB) {
 //   for up to 200 ms waiting for more data to coalesce.
 // - TCP keep-alive: detects dead peers (e.g. clients that vanish without
 //   sending FIN) so that their task slots are reclaimed promptly.
+// - SO_SNDBUF: raises the kernel send buffer so that large pipeline flushes
+//   do not block waiting for the socket to drain.
 //
 // Pipelining: A single `read_buf()` may deliver multiple back-to-back RESP commands.
 // The inner loop drains all complete commands before yielding back to the outer
 // read, so pipeline throughput is never gated on an extra read syscall.
+// A depth cap (MAX_PIPELINE_DEPTH) ensures a single client cannot monopolise
+// a worker thread by sending an unbounded burst in one TCP segment.
 async fn handle_client(socket: TcpStream, db: &DB) {
     if let Err(e) = socket.set_nodelay(true) {
         warn!("TCP_NODELAY failed: {}", e);
@@ -194,13 +213,20 @@ async fn handle_client(socket: TcpStream, db: &DB) {
         warn!("TCP_KEEPALIVE failed: {}", e);
     }
 
+    // Raise the kernel send buffer so large pipeline flushes do not stall
+    // waiting for the socket to drain. Linux doubles the supplied value
+    // internally, so SO_SNDBUF_BYTES yields roughly 2× effective capacity.
+    if let Err(e) = sock_ref.set_send_buffer_size(SO_SNDBUF_BYTES) {
+        warn!("SO_SNDBUF failed: {}", e);
+    }
+
     // Split into independent read and write halves so BufWriter can own the
     // write side while we simultaneously read into `buf`.
     let (mut reader, writer) = socket.into_split();
 
     // BufWriter coalesces multiple small `write_all()` calls into a single
-    // `send()` syscall. For a pipeline of 10 commands this means one syscall
-    // instead of ten. This is a major win on high-throughput workloads.
+    // `send()` syscall. At 64 KiB a pipeline of ~3,000 small GET replies fits
+    // in one batch, sending them all in a single syscall.
     let mut writer = BufWriter::with_capacity(WRITE_BUF_BYTES, writer);
     let mut buf = BytesMut::with_capacity(READ_BUF_BYTES);
     let mut client = Client::new();
@@ -220,14 +246,31 @@ async fn handle_client(socket: TcpStream, db: &DB) {
             break;
         }
 
-        // inner pipeline drain loop
+        // Inner pipeline drain loop.
         // We process every complete command already in `buf` before issuing
         // another read(). This is the key to pipeline throughput: a client
         // that sends 50 commands in one TCP segment gets all 50 replies in
         // one BufWriter flush, not 50 round-trips.
+        //
+        // The depth counter caps how many commands we process before flushing
+        // and implicitly yielding (flush is async). This prevents a single
+        // misbehaving client from starving other connections on the same
+        // Tokio worker thread.
+        let mut pipeline_count = 0usize;
         loop {
             if buf.is_empty() {
                 break;
+            }
+
+            // Flush and yield if we have processed too many commands in one
+            // pass. The flush delivers partial results to the client and gives
+            // the Tokio scheduler a chance to run other tasks.
+            if pipeline_count >= MAX_PIPELINE_DEPTH {
+                if let Err(e) = writer.flush().await {
+                    error!("flush error (mid-pipeline): {}", e);
+                    return;
+                }
+                pipeline_count = 0;
             }
 
             let (resp, consumed) = match Parser::parse(&buf) {
@@ -243,13 +286,22 @@ async fn handle_client(socket: TcpStream, db: &DB) {
                     let _ = RespType::SimpleError(msg).write_to(&mut writer).await;
                     // Discard the buffer; we cannot know where the next
                     // valid command starts in a corrupted stream.
+                    let _ = writer.flush().await;
                     buf.clear();
+                    // Re-expand the buffer back to the initial capacity if
+                    // repeated advance() calls have shrunk the inline window.
+                    // Without this, error recovery can degrade into a
+                    // repeated small-read -> grow -> reallocate cycle.
+                    if buf.capacity() < READ_BUF_BYTES {
+                        buf.reserve(READ_BUF_BYTES - buf.capacity());
+                    }
                     break;
                 }
             };
 
             // Consume exactly the bytes that formed this command.
             buf.advance(consumed);
+            pipeline_count += 1;
 
             let cmd = match extract_command(&resp) {
                 Ok(cmd) => cmd,
@@ -277,9 +329,13 @@ async fn handle_client(socket: TcpStream, db: &DB) {
 
         // Flush once per read batch. BufWriter may have accumulated several
         // responses; flushing here sends them all in a single syscall.
-        if let Err(e) = writer.flush().await {
-            error!("flush error: {}", e);
-            return;
+        // Skip the syscall entirely when the buffer is empty (e.g. an
+        // incomplete read that produced no complete commands).
+        if !writer.buffer().is_empty() {
+            if let Err(e) = writer.flush().await {
+                error!("flush error: {}", e);
+                return;
+            }
         }
     }
 }
