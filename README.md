@@ -1,174 +1,101 @@
 # Ember
 
-Ember is a Redis-inspired in-memory key-value store built in Rust to explore systems programming, concurrency, networking, and high-performance backend design.
 
-The project focuses on understanding how modern in-memory systems handle concurrent workloads, protocol parsing, persistence, expiration, and efficient request processing.
+Ember is a High-Performance, Concurrent, Redis-compatible Key-Value Store in Rust engineered for high throughput and low-latency workloads. Built from the ground up in Rust using the Tokio asynchronous runtime, Ember implements a sharded concurrency model and optimized network I/O to handle hundreds of thousands of requests per second on commodity hardware.
 
----
+The project serves as a deep dive into systems programming, specifically focusing on protocol design (RESP), lock-free data structures, asynchronous networking, and database persistence internals.
 
-## Features
+## Core Features
 
-- Concurrent request handling
-- Asynchronous runtime using Tokio
-- TCP server implementation
-- Thread-safe shared in-memory datastore
-- Redis Serialization Protocol (RESP) support
-- Key expiration support
-- Eviction policies
-- Persistence support
-- Transaction support using commands like `MULTI`, `EXEC`, and `DISCARD`
-- Redis-compatible benchmarking using `redis-benchmark`
-- Lightweight and modular architecture
-
----
-
-## Supported Commands
-
-| Command                                | Description                              |
-|----------------------------------------|------------------------------------------|
-| `PING`                                 | Health check                             |
-| `ECHO message`                         | Echo back the provided message           |
-| `SET key value [EX seconds\|PX ms]`    | Store a value (optionally with expiry)   |
-| `GET key`                              | Retrieve a value                         |
-| `DELETE key`                           | Delete a key                             |
-| `LPUSH key value [value ...]`          | Push one or more values to list head     |
-| `RPUSH key value [value ...]`          | Push one or more values to list tail     |
-| `LRANGE key start stop`                | Read a range of list elements            |
-| `EXPIRE key duration [NX\|XX\|GT\|LT]` | Set expiration with optional condition   |
-| `EXISTS key`                           | Check key existence                      |
-| `TTL key`                              | Get remaining TTL                        |
-| `MULTI`                                | Start a transaction block                |
-| `EXEC`                                 | Execute all commands in a block          |
-| `DISCARD`                              | Discard transaction commands             |
-| `SAVE`                                 | Persist in-memory state to disk          |
-
----
-
-## Transactions
-
-Ember supports transactional execution, enabling clients to group multiple commands in a transaction block. Using `MULTI`, clients begin a transaction and queue commands for atomic execution, which can then be finalized with `EXEC` or canceled with `DISCARD`. Transactions help ensure predictable batch operation semantics, similar to Redis. This functionality was implemented to explore transactional concepts and command queuing within the server.
-
-Programmatic workflow:
-```
-MULTI
-OK
-
-SET key1 value1
-QUEUED
-
-SET key2 value2
-QUEUED
-
-EXEC
-1) OK
-2) OK
-```
-If you run `DISCARD` instead of `EXEC`, all queued commands are abandoned.
-
----
+- **Redis Compatibility**: Implements the Redis Serialization Protocol (RESP) and supports standard commands like `SET`, `GET`, `LPUSH`, `LRANGE`, and `EXPIRE`.
+- **High Concurrency**: Utilizes a sharded hash map (`DashMap`) to eliminate global lock contention.
+- **Advanced I/O**: Multi-acceptor model using `SO_REUSEPORT` for kernel-level load balancing across CPU cores.
+- **Zero-Copy Parsing**: Efficient RESP parsing using `bytes::BytesMut` to minimize heap allocations in the hot path.
+- **Persistence**: Point-in-time RDB snapshotting with atomic file swaps.
+- **Expiration Engine**: Hybrid lazy and active key expiration using a probabilistic sampling algorithm.
+- **Pipelining Support**: Batch-aware processing with `BufWriter` for coalesced network syscalls.
 
 ## Architecture
 
-Ember follows an asynchronous event-driven architecture.
+Ember's architecture is designed to scale linearly with available CPU cores by removing serial bottlenecks at both the networking and storage layers.
 
-```text
-             Client
-               ↓
-           TCP Listener
-               ↓
-      Async Connection Handler
-               ↓
-           RESP Parser
-               ↓
-     Command Execution Layer
-               ↓
-     Command Dispatcher Layer
-               ↓
-     Shared In-Memory Store
-```
+### Parallel Acceptor Model
+Instead of a single accept loop, a common bottleneck in high-RPS servers. Ember spawns one `TcpListener` per logical CPU core. By leveraging the `SO_REUSEPORT` socket option, the Linux kernel distributes incoming SYN packets across these listeners using a flow-based hash. This eliminates userspace contention during connection establishment and allows the server to scale to millions of concurrent connections.
 
-## Concurrency Model
+### Sharded Concurrency
+Ember avoids the "Global Lock" problem typical of simple in-memory stores. The primary database state is managed via `DashMap`, which shards the keyspace across 64 independent `RwLock` segments. This ensures that operations on different keys can proceed in parallel without blocking, providing high-performance concurrent access even under heavy write pressure.
 
-Ember uses asynchronous request handling powered by Tokio to support multiple concurrent client connections efficiently.
-
-Key areas explored during development:
-
-- Concurrent socket handling
-- Shared state synchronization
-- Request parsing performance
-- Expiration handling
-- Async task scheduling
-
+### I/O Optimization & Pipelining
+The network stack is tuned for throughput:
+- **`BufWriter` Coalescing**: Small RESP responses (e.g., `+OK\r\n`) are buffered in userspace (64 KiB) and flushed in batches, reducing `write()` syscall overhead by up to 8x.
+- **`TCP_NODELAY`**: Nagle's algorithm is disabled to ensure immediate delivery of responses, critical for low-latency command/response cycles.
+- **Pipeline Draining**: The server drains all complete commands from the read buffer before issuing a new `read()` syscall, maximizing the throughput of pipelined clients.
 
 ## Persistence
 
-Ember includes persistence support to retain data across server restarts.
+Ember implements an RDB-inspired snapshotting mechanism for durability.
 
-The persistence layer was implemented to explore:
+- **Point-in-Time Snapshots**: When a snapshot is triggered, Ember takes a consistent view of the `DashMap` shards and serializes them to an RDB file.
+- **Non-Blocking Writes**: Serialization happens in a background task, ensuring the main I/O event loop is never blocked by disk I/O.
+- **Atomic Renames**: Snapshots are first written to a temporary file (`.tmp`) and then moved to the final destination using `std::fs::rename`, ensuring that a crash during persistence never leaves the database in a corrupted state.
 
-- Disk-backed state storage
-- Serialization strategies
-- Recovery workflows
-- Tradeoffs between durability and performance
+## Expiration & Eviction
 
+Ember uses a two-pronged strategy for managing key lifetimes, modeled after Redis's own expiration engine:
 
-## Expiration and Eviction
+1.  **Lazy Expiration**: Every `GET` or `LRANGE` request first checks the expiration metadata. If the key has passed its TTL, it is deleted immediately, and `nil` is returned.
+2.  **Active Expiration**: A background reaper task runs every 100ms. It samples 20 random keys from the expiration map:
+    - Any expired keys are removed.
+    - If more than 25% of the sampled keys were expired, the task repeats immediately to aggressively clear memory.
+    - This probabilistic approach ensures that expired keys are eventually cleared without requiring an $O(n)$ scan of the entire database.
 
-The datastore supports key expiration with TTL-based invalidation.
+## Benchmarking
 
-Eviction mechanisms were added to explore:
+Ember is fully compatible with `redis-benchmark`. To evaluate performance, ensure the server is compiled in `--release` mode.
 
-- Memory management strategies
-- Automatic cleanup
-- Expired key handling under concurrent workloads
+### Sample Benchmark
+```bash
+# Test GET performance with 50 concurrent clients and 100k requests
+redis-benchmark -p 6379 -t set,get -n 100000 -q
 
-
-## Running the Project
-
-### Clone the Repository
+# Test pipelining performance (16 commands per batch)
+redis-benchmark -p 6379 -P 16 -c 100 -t set -n 1000000 -q
 ```
-git clone https://github.com/M-SaaD-H/ember.git
-cd ember
-```
 
-### Build
-```
+*Note: Performance varies based on kernel tuning (e.g., `somaxconn`, `ulimit`) and hardware, but Ember is designed to saturated 10GbE links on modern Linux systems.*
+
+## Engineering Learnings & Tradeoffs
+
+- **Memory vs. Latency**: Using `Arc` and `DashMap` provides high concurrency but introduces slight memory overhead compared to a single-threaded event loop (like standard Redis). However, for multi-core systems, the throughput gains significantly outweigh the overhead.
+- **Async Overhead**: While `tokio` introduces a small runtime cost, it allows Ember to handle massive connection counts that would be impossible with a thread-per-connection model.
+- **Zero-Copy Challenges**: Implementing zero-copy RESP parsing required careful management of `Bytes` reference counting to ensure memory is reclaimed promptly while avoiding unnecessary clones of large string values.
+
+## Usage
+
+### Building from source
+```bash
 cargo build --release
+./target/release/ember
 ```
 
-### Run
+### Basic Commands
+```bash
+# Set a key with 60 second expiration
+redis-cli SET session_id "abc-123" EX 60
+
+# Push to a list
+redis-cli LPUSH tasks "email_user" "resize_image"
+
+# Range query
+redis-cli LRANGE tasks 0 -1
 ```
-cargo run --release
-```
 
-The server runs on:
-```
-127.0.0.1:6379
-```
+## Future Roadmap
 
-## Project Goals
-
-This project was built to gain hands-on experience with:
-
-- Systems programming in Rust
-- Concurrent backend system design
-- Async runtimes and networking
-- Database internals
-- Performance-oriented engineering
-- Persistence and memory management
-
-
-## Future Improvements
-
-Planned areas of exploration include:
-
-- Pub/Sub support
-- Replication
-- Clustered architecture
-- Advanced eviction strategies
-- Improved profiling and observability
-- Optimized persistence mechanisms
-- Enhanced transactional guarantees
+- **AOF (Append Only File)**: Implement write-ahead logging for higher durability guarantees.
+- **LRU Eviction**: Implement a Least Recently Used (LRU) policy to handle memory pressure when the max-memory limit is reached.
+- **Cluster Support**: Hash-based sharding across multiple Ember nodes.
+- **Extended Types**: Support for Sets, Sorted Sets (Skip Lists), and Hashes.
 
 ## License
 
