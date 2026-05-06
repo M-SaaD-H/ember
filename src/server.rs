@@ -9,14 +9,11 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+use crate::command::{command::extract_command, dispatcher::dispatch};
 use crate::config::client::Client;
 use crate::database::core::DB;
-use crate::command::{
-    dispatcher::dispatch,
-    command::extract_command,
-};
 use crate::resp::{
-    parser::{Parser, ParseError},
+    parser::{ParseError, Parser},
     types::RespType,
 };
 
@@ -212,86 +209,56 @@ async fn handle_client(socket: TcpStream, db: &DB) {
     if let Err(e) = sock_ref.set_tcp_keepalive(&ka) {
         warn!("TCP_KEEPALIVE failed: {}", e);
     }
-
-    // Raise the kernel send buffer so large pipeline flushes do not stall
-    // waiting for the socket to drain. Linux doubles the supplied value
-    // internally, so SO_SNDBUF_BYTES yields roughly 2× effective capacity.
     if let Err(e) = sock_ref.set_send_buffer_size(SO_SNDBUF_BYTES) {
         warn!("SO_SNDBUF failed: {}", e);
     }
+    drop(sock_ref);
 
-    // Split into independent read and write halves so BufWriter can own the
-    // write side while we simultaneously read into `buf`.
     let (mut reader, writer) = socket.into_split();
-
-    // BufWriter coalesces multiple small `write_all()` calls into a single
-    // `send()` syscall. At 64 KiB a pipeline of ~3,000 small GET replies fits
-    // in one batch, sending them all in a single syscall.
     let mut writer = BufWriter::with_capacity(WRITE_BUF_BYTES, writer);
     let mut buf = BytesMut::with_capacity(READ_BUF_BYTES);
     let mut client = Client::new();
 
-    loop {
-        // Append new bytes to whatever is left over from the previous read.
-        let bytes_read = match reader.read_buf(&mut buf).await {
-            Ok(n) => n,
-            Err(e) => {
-                error!("read error: {}", e);
-                break;
+    'outer: loop {
+        if buf.is_empty() {
+            // Buffer is empty: we must await new data.
+            match reader.read_buf(&mut buf).await {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    error!("read error: {}", e);
+                    break;
+                }
             }
-        };
-
-        // n == 0 means the peer sent EOF (graceful close).
-        if bytes_read == 0 {
-            break;
+        } else {
+            match reader.try_read_buf(&mut buf) {
+                Ok(0) => break, // EOF
+                Ok(_) => {}     // got more bytes, fall through to parse
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => { error!("read error: {}", e); break; }
+            }
         }
 
-        // Inner pipeline drain loop.
-        // We process every complete command already in `buf` before issuing
-        // another read(). This is the key to pipeline throughput: a client
-        // that sends 50 commands in one TCP segment gets all 50 replies in
-        // one BufWriter flush, not 50 round-trips.
-        //
-        // The depth counter caps how many commands we process before flushing
-        // and implicitly yielding (flush is async). This prevents a single
-        // misbehaving client from starving other connections on the same
-        // Tokio worker thread.
+        if buf.capacity().saturating_sub(buf.len()) < READ_BUF_BYTES / 2 {
+            buf.reserve(READ_BUF_BYTES);
+        }
+
         let mut pipeline_count = 0usize;
+        let mut made_progress = false;
+
         loop {
             if buf.is_empty() {
                 break;
             }
 
-            // Flush and yield if we have processed too many commands in one
-            // pass. The flush delivers partial results to the client and gives
-            // the Tokio scheduler a chance to run other tasks.
-            if pipeline_count >= MAX_PIPELINE_DEPTH {
-                if let Err(e) = writer.flush().await {
-                    error!("flush error (mid-pipeline): {}", e);
-                    return;
-                }
-                pipeline_count = 0;
-            }
-
             let (resp, consumed) = match Parser::parse(&buf) {
                 Ok((data, consumed)) => (data, consumed),
-
-                Err(ParseError::Incomplete) => {
-                    // Not enough bytes yet; go back to the outer read loop.
-                    break;
-                }
-
+                Err(ParseError::Incomplete) => break,
                 Err(ParseError::Invalid(msg)) => {
                     error!("invalid RESP: {}", msg);
                     let _ = RespType::SimpleError(msg).write_to(&mut writer).await;
-                    // Discard the buffer; we cannot know where the next
-                    // valid command starts in a corrupted stream.
                     let _ = writer.flush().await;
                     buf.clear();
-                    // Re-expand the buffer back to the initial capacity if
-                    // repeated advance() calls have shrunk the inline window.
-                    // Without this, error recovery can degrade into a
-                    // repeated small-read -> grow -> reallocate cycle.
                     if buf.capacity() < READ_BUF_BYTES {
                         buf.reserve(READ_BUF_BYTES - buf.capacity());
                     }
@@ -299,9 +266,9 @@ async fn handle_client(socket: TcpStream, db: &DB) {
                 }
             };
 
-            // Consume exactly the bytes that formed this command.
             buf.advance(consumed);
             pipeline_count += 1;
+            made_progress = true;
 
             let cmd = match extract_command(&resp) {
                 Ok(cmd) => cmd,
@@ -322,20 +289,25 @@ async fn handle_client(socket: TcpStream, db: &DB) {
 
             if let Err(e) = res.write_to(&mut writer).await {
                 error!("write error: {}", e);
-                // The connection is broken; stop processing for this client.
                 return;
+            }
+
+            if pipeline_count >= MAX_PIPELINE_DEPTH {
+                if let Err(e) = writer.flush().await {
+                    error!("flush error (mid-pipeline): {}", e);
+                    break 'outer;
+                }
+                pipeline_count = 0;
             }
         }
 
-        // Flush once per read batch. BufWriter may have accumulated several
-        // responses; flushing here sends them all in a single syscall.
-        // Skip the syscall entirely when the buffer is empty (e.g. an
-        // incomplete read that produced no complete commands).
-        if !writer.buffer().is_empty() {
+        if made_progress && !writer.buffer().is_empty() {
             if let Err(e) = writer.flush().await {
                 error!("flush error: {}", e);
                 return;
             }
         }
     }
+
+    let _ = writer.flush().await;
 }
