@@ -6,7 +6,8 @@ use anyhow::Result;
 
 use crate::rdb::{reader::load_rdb, writer::save_rdb};
 
-pub const RDB_FILE: &str = "snapshots/dump.rdb";
+const RDB_FILE: &str = "snapshots/dump.rdb";
+const SAMPLE_SIZE: usize = 20;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RedisObject {
@@ -75,9 +76,8 @@ impl DB {
 
         self.data.insert(key.clone(), val);
 
-        match expires_at {
-            Some(exp) => { self.expirations.insert(key, exp); }
-            None => { /* no expiration, nothing to do */ }
+        if let Some(exp) = expires_at {
+            self.expirations.insert(key, exp);
         }
 
         Ok(())
@@ -100,7 +100,7 @@ impl DB {
 
         match self.data.get(key) {
             Some(ro) => Ok(ro.clone()),
-            None     => Ok(RedisObject::String("nil".to_string())),
+            None => Ok(RedisObject::String("nil".to_string())),
         }
     }
 
@@ -110,9 +110,10 @@ impl DB {
         Ok(())
     }
 
-    pub fn lpush(&self, key: String, values: Vec<RedisObject>) -> Result<()> {
+    pub fn lpush(&self, key: String, mut values: Vec<RedisObject>) -> Result<()> {
         match self.data.get_mut(&key) {
             None => {
+                values.reverse();
                 self.data.insert(key, RedisObject::List(values));
             }
             Some(mut entry) => match entry.value_mut() {
@@ -241,11 +242,10 @@ impl DB {
     // only, there is no monolithic lock held across the whole function, so
     // live GET/SET traffic is never blocked by this background task.
     fn active_expiration_cycle(&self) {
-        let sample_size = 20usize;
         let now = Instant::now();
         let mut rng = rand::rng();
 
-        // Collect up to `sample_size` random keys from the expirations map.
+        // Collect up to `SAMPLE_SIZE` random keys from the expirations map.
         // We materialise them into a Vec so we release the iterator (and its
         // shard locks) before calling remove().
         let sampled: Vec<String> = {
@@ -253,11 +253,11 @@ impl DB {
             if total == 0 {
                 return;
             }
-            let skip = rng.random::<u64>() as usize % total;
+            let skip = rng.random_range(0..total);
             self.expirations
                 .iter()
                 .skip(skip)
-                .take(sample_size)
+                .take(SAMPLE_SIZE)
                 .map(|e| e.key().clone())
                 .collect()
         };

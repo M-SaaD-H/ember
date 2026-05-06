@@ -52,8 +52,8 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command> {
     match cmd {
         "PING" => Ok(Command::PING),
         "ECHO" => {
-            if let RespType::BulkString(arg) = &args[0] {
-                Ok(Command::ECHO(arg.clone()))
+            if let RespType::BulkString(msg) = &args[0] {
+                Ok(Command::ECHO(msg.clone()))
             } else {
                 Err(anyhow::anyhow!("ECHO command requires an argument."))
             }
@@ -63,7 +63,13 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command> {
                 return Err(anyhow::anyhow!("SET command requires two arguments."));
             }
 
-            if let (RespType::BulkString(k), RespType::BulkString(v)) = (&args[0], &args[1]) {
+            if let (
+                RespType::BulkString(k),
+                RespType::BulkString(v)
+            ) = (
+                &args[0],
+                &args[1]
+            ) {
                 // no expiry
                 if args.len() < 4 {
                     return Ok(Command::SET(k.clone(), v.clone(), None));
@@ -74,7 +80,8 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command> {
                         RespType::BulkString(flag),
                         RespType::BulkString(expires_in)
                     ) = (
-                        &args[2], &args[3]
+                        &args[2],
+                        &args[3]
                     ) {
                         let expires_in_int = parse_int(expires_in);
 
@@ -83,14 +90,14 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command> {
                         } else if flag.to_ascii_uppercase() == "PX" {
                             Some(expires_in_int)
                         } else {
-                            None
+                            return Err(anyhow::anyhow!("Invalid expiry flag. Only EX and PX are supported."));
                         }
-                } else {
-                    None
-                };
+                    } else {
+                        return Err(anyhow::anyhow!("Invalid SET command format for expiry. Expected EX or PX followed by expiry time."));
+                    };
 
                 let expires_at = match expires_in_millis {
-                    Some(e) => Some(Instant::now() + Duration::from_millis(e as u64)),
+                    Some(exp) => Some(Instant::now() + Duration::from_millis(exp as u64)),
                     None => None,
                 };
 
@@ -176,7 +183,7 @@ fn parse_command(cmd: &str, args: &[RespType]) -> Result<Command> {
                                 _ => return Err(anyhow::anyhow!("Invalid option in expire command. Only NX, XX, GT, LT are supported.")),
                             }
                         } else {
-                            None
+                            return Err(anyhow::anyhow!("Invalid option format in expire command. Expected a bulk string."));
                         }
                     } else {
                         None

@@ -30,14 +30,11 @@ fn execute_command(client: &mut Client, db: &DB, cmd: Command) -> Result<RespTyp
         Command::PING => {
             Ok(RespType::SimpleString("Pong".to_string()))
         }
-        Command::ECHO(message) => {
-            Ok(RespType::BulkString(message))
+        Command::ECHO(msg) => {
+            Ok(RespType::BulkString(msg))
         }
         Command::SET(key, value, expires_in) => {
             let val = RedisObject::String(value);
-            if let Some(exp) = expires_in {
-                println!("exp: {:?}", exp);
-            }
             match db.set(key, val, expires_in) {
                 Ok(()) => Ok(RespType::SimpleString("Ok".to_string())),
                 Err(e) => Err(anyhow::anyhow!("Failed to execute command. E: {}", e)),
