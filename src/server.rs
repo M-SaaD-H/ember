@@ -64,14 +64,46 @@ pub struct Server {
 impl Server {
     // Bind to 'port' on localhost and load (or create) the on-disk snapshot.
     // Returns an error if the address cannot be parsed or the port is already in use.
-    pub async fn new(port: &str) -> Result<Self> {
-        let addr: SocketAddr = format!("127.0.0.1:{}", port)
-            .parse()
-            .with_context(|| format!("invalid port: {}", port))?;
-
+    pub async fn new(mut port: u16) -> Result<Self> {
         let db = DB::new();
 
-        Ok(Self { addr, db })
+        loop {
+            let addr: SocketAddr = format!("127.0.0.1:{}", port)
+                .parse()
+                .with_context(|| format!("invalid port: {}", port))?;
+
+            // Try to bind a listener to check if the port is available.
+            // Since we use SO_REUSEPORT in build_listener, this will fail
+            // if another application (without SO_REUSEPORT) is using the port.
+            match build_listener(addr) {
+                Ok(_) => {
+                    return Ok(Self { addr, db });
+                }
+                Err(e) => {
+                    // Check if the error is Address In Use
+                    let is_in_use = e.chain().any(|cause| {
+                        if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
+                            io_err.kind() == std::io::ErrorKind::AddrInUse
+                        } else {
+                            false
+                        }
+                    });
+
+                    if is_in_use {
+                        warn!("Port {} is already in use, trying {}", port, port + 1);
+                        port += 1;
+                    } else {
+                        return Err(e).context(format!("failed to bind to port {}", port));
+                    }
+                }
+            }
+        }
+    }
+
+    // Intended for use in tests only. Do not call in production code.
+    #[allow(dead_code)]
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
     }
 
     // Spawn one acceptor task per logical CPU core, then wait for all of them
@@ -311,3 +343,5 @@ async fn handle_client(socket: TcpStream, db: &DB) {
 
     let _ = writer.flush().await;
 }
+
+

@@ -3,4 +3,5 @@ pub mod config;
 pub mod database;
 pub mod resp;
 pub mod rdb;
+pub mod server;
 pub mod utils;

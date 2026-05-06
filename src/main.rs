@@ -13,10 +13,10 @@ use crate::server::Server;
 // constants for the server
 const DEFAULT_PORT: u16 = 6379;
 
-fn parse_args() -> String {
+fn parse_args() -> u16 {
     let args: Vec<String> = std::env::args().collect();
     
-    let mut port = DEFAULT_PORT.to_string();
+    let mut port = DEFAULT_PORT;
 
     // skipping the first arg (first arg is not of our interest)
     // the args that are passed on while starting the program
@@ -26,7 +26,7 @@ fn parse_args() -> String {
         match args[i].as_str() {
             "--port" => {
                 if i + 1 < args.len() {
-                    port = args[i + 1].clone();
+                    port = args[i + 1].clone().parse().unwrap_or(DEFAULT_PORT);
                     i += 2;
                 } else {
                     i += 1; // there is no ++ operator in rust
@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
     let port = parse_args();
 
     // await the 'new()' cz initializing the server takes time
-    let server = Server::new(&port).await?;
+    let server = Server::new(port).await?;
     server.run().await?;
     // the server will keep running untill the program is terminated
 
